@@ -357,7 +357,12 @@ async def test_admin_sees_client_in_roster(connected_client):
 
 @pytest.mark.asyncio
 async def test_admin_command_reaches_client_and_returns(connected_client):
-    """Admin -> Engine -> Client -> Engine -> Admin, with a stub at the far end."""
+    """Admin -> Engine -> Client -> Engine -> Admin, with real execution at the
+    far end since Phase 4.
+
+    A deliberately absent process is targeted so the assertion is about the
+    round trip, not about what happens to be running on the test machine.
+    """
     reader, writer = await _open_admin(connected_client)
     try:
         await _send(
@@ -367,7 +372,7 @@ async def test_admin_command_reaches_client_and_returns(connected_client):
                 {
                     "command_type": MSG_TERMINATE_PROCESS,
                     "target_clients": [CLIENT_ID],
-                    "parameters": {"process_name": "chrome.exe", "force": False},
+                    "parameters": {"process_name": "no-such-process-xyz.exe"},
                 },
                 client_id="admin-01",
                 admin_id="admin-01",
@@ -378,7 +383,7 @@ async def test_admin_command_reaches_client_and_returns(connected_client):
 
         assert response["client_id"] == CLIENT_ID
         assert response["payload"]["status"] == STATUS_ERROR
-        assert "Not implemented" in response["payload"]["message"]
+        assert "No process named" in response["payload"]["message"]
     finally:
         writer.close()
 

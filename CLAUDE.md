@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, and **`issues.md`** logs known bugs, deferred decisions and unverified claims. Read both before starting a phase — `issues.md` marks which items block which phase.
 
-Phases 0–3 are complete: the Engine and the Admin GUI are fully implemented and tested. The Client Agent's monitors and executor are still deliberate stubs (Phase 4) — commands reach it, get audited, and come back "not implemented", which is the expected state.
+Phases 0–4 are complete: Engine, Admin GUI and Client Agent are all implemented and tested (161 tests). The only Phase 4 gap is packaging — the bundled Python runtime and the frozen helper executables — which is blocked on a user decision (`issues.md` A5). Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are not shippable.
 
 `issues.md` section A lists decisions only the user can make (retention period, institutional approval, TLS scope). Don't try to resolve those in code.
 
@@ -17,7 +17,7 @@ Phases 0–3 are complete: the Engine and the Admin GUI are fully implemented an
 Run everything through the venv. The project is installed editable, which is what makes `from common.protocol import ...` resolve from every entry point.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                    # 126 tests
+.\.venv\Scripts\python.exe -m pytest -q                    # 161 tests
 .\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common --cov=admin_gui
 .\.venv\Scripts\python.exe -m scripts.bench_database       # SQLite write cost
 .\.venv\Scripts\python.exe -m client.main                  # Client Agent
@@ -67,6 +67,8 @@ Wire protocol is newline-delimited JSON over TCP, UTF-8. Every message has `type
 **Database conventions.** Timestamps are ISO-8601 UTC strings (fixed width, so `WHERE timestamp >= ?` compares chronologically). Network counters arrive cumulative since client boot, so summaries sum positive deltas and skip negatives — a negative delta is a reboot, not negative usage. Every dispatch gets its own `command_id` even in a broadcast. Writes are synchronous on the event loop by measurement, not by oversight; re-run `scripts/bench_database.py` before changing that.
 
 **Access-control asymmetry is intentional.** Application management is *blacklist-only* (whitelisting can't reliably enumerate OS/helper processes, so unlisted apps are allowed by design). Website filtering supports *both* modes via a required `mode` field, with blacklist as the default and whitelist reserved for locked-down sessions like exams. Don't "fix" this into symmetry.
+
+**Don't launch the overlay or dialog casually.** `client/overlay_app.py` takes over the full screen, disables Task Manager, and re-asserts topmost every 500ms. It always restores the Task Manager policy on exit — including on a crash — and closes itself at its `--until` time, but running it uninvited on someone's working machine is disruptive. Ask first.
 
 **Lockout enforcement fails closed.** The schedule under `%ProgramData%` is HMAC-protected; if validation fails, treat the block as still active. Blocks are capped at 2 hours as a safety timeout against the overlay's own hangs (not against network loss — enforcement is local and doesn't need the Engine). Two independent watchdogs exist because the overlay *and* the agent can each hang: the agent polls every 30s, and an installer-registered Windows Scheduled Task checks every ~5 min. On boot the agent re-reads the schedule before anything else and re-launches the overlay if a block is still active.
 

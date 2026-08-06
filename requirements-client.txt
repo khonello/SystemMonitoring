@@ -9,3 +9,8 @@
 # Windows service installation and Win32 API access (service registration,
 # scheduled-task registration for the lockout watchdog).
 pywin32==312
+
+# Screen capture. ImageGrab is Windows/macOS only, which is fine — the Client
+# Agent is Windows-only. The executor degrades to a clear error rather than
+# crashing if this is absent.
+Pillow==12.3.0

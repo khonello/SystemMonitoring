@@ -81,6 +81,13 @@ MSG_TERMINATE_PROCESS: Final[str] = "TERMINATE_PROCESS"
 MSG_SCREEN_CAPTURE: Final[str] = "SCREEN_CAPTURE"
 MSG_SET_WEBSITE_POLICY: Final[str] = "SET_WEBSITE_POLICY"
 
+# Added in Phase 4 alongside the enforcement that gives them meaning. The
+# README describes both behaviours under Access Control but names no message
+# for either.
+MSG_SET_APP_BLACKLIST: Final[str] = "SET_APP_BLACKLIST"
+MSG_SET_TIME_RESTRICTION: Final[str] = "SET_TIME_RESTRICTION"
+MSG_SHOW_DIALOG: Final[str] = "SHOW_DIALOG"
+
 # ---------------------------------------------------------------------------
 # Message types — Admin to Engine, Engine to Admin
 # ---------------------------------------------------------------------------
@@ -113,6 +120,9 @@ CLIENT_COMMANDS: Final[frozenset[str]] = frozenset({
     MSG_TERMINATE_PROCESS,
     MSG_SCREEN_CAPTURE,
     MSG_SET_WEBSITE_POLICY,
+    MSG_SET_APP_BLACKLIST,
+    MSG_SET_TIME_RESTRICTION,
+    MSG_SHOW_DIALOG,
 })
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,19 @@ and "Component build order". Where this conflicts with the 4-week calendar in
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 
+| Phase | Status |
+|-------|--------|
+| 0 — Repo bootstrap | ✅ done |
+| 1 — Scaffold pass (all components) | ✅ done |
+| 2 — Engine | ✅ done |
+| 3 — Admin GUI | ✅ done |
+| 4 — Client Agent | ✅ done, except packaging (blocked on [issues.md](issues.md) A5) |
+| 5 — Full integration | next |
+| 6 — Authentication | not started |
+
+**161 tests passing.** Open problems and decisions live in
+[issues.md](issues.md); section A there needs your input.
+
 ---
 
 ## Phase 0 — Repo Bootstrap ✅
@@ -201,42 +214,70 @@ present but empty. No real logic in this phase.
 
 ---
 
-## Phase 4 — Client Agent (full implementation)
+## Phase 4 — Client Agent (full implementation) ✅ except packaging
 
 ### Monitoring
-- [ ] Process monitor — `psutil.process_iter` **via `asyncio.to_thread`**, never inline
-- [ ] Network monitor — `net_io_counters` deltas
-- [ ] USB monitor — event-driven, log-only, no blocking
-- [ ] Idle time — Windows `GetLastInputInfo` via ctypes
+- [x] Process monitor — `psutil.process_iter` **via `asyncio.to_thread`**,
+      plus window titles from `EnumWindows` through ctypes, since psutil has no
+      notion of windows. CPU counters are primed at startup so the first batch
+      is not all zeroes.
+- [x] Network monitor — cumulative counters sent as-is, differenced by the
+      Engine; connection count degrades to 0 rather than failing when it needs
+      elevation
+- [x] USB monitor — polls removable drives rather than subscribing to
+      `WM_DEVICECHANGE`. A message-only window would be more immediate but
+      needs a second event loop running alongside asyncio, for events that
+      happen a few times a day. First poll establishes a baseline so drives
+      already mounted at startup are not reported as insertions.
+- [x] Idle time — `GetLastInputInfo`, with the tick-count wrap handled
+- [x] Screen-lock detection via `OpenInputDesktop`
 
 ### Commands
-- [ ] `execute_script` — detached launch, per-`command_id` log file, immediate
-      `COMMAND_ACCEPTED`, no waiting on completion
-- [ ] `tail_log_and_report` — poll on interval, read only when file size grew,
-      one `COMMAND_COMPLETE` on exit, then delete log + temp script
-- [ ] `terminate_script` keyed by `command_id`; `terminate_process` by name
-- [ ] On-arrival script re-validation with the bundled interpreter
-- [ ] Screen capture with compression
+- [x] `execute_script` — detached launch, per-`command_id` log, immediate
+      `COMMAND_ACCEPTED`, never awaits completion
+- [x] `tail_log_and_report` — reads only when the file has grown, plus a final
+      drain so output between the last poll and exit is not lost
+- [x] `terminate_script` keyed by `command_id`; `terminate_process` by name
+- [x] On-arrival re-validation with the bundled interpreter
+- [x] Screen capture — JPEG, base64, via `to_thread` (verified live at
+      1920x1080, 119 KB)
 
 ### Access control
-- [ ] Website filtering, both modes, hosts-file or proxy based
-- [ ] App blacklist enforcement via existing `TERMINATE_PROCESS`
-- [ ] Dialog exe (shutdown / grace warnings) — spawned on demand, choice
-      reported back via exit code or stdout
-- [ ] Overlay exe — fullscreen single-monitor lockout, topmost re-assert ~500ms,
-      Task Manager policy toggle
-- [ ] `%ProgramData%` state store, ACL-restricted, HMAC-protected, **fails closed**
-- [ ] 2-hour continuous-block cap
-- [ ] Watchdogs: agent polls every 30s **and** an installer-registered Windows
-      Scheduled Task checks every ~5min (covers the agent itself hanging)
-- [ ] Reboot handling: re-read schedule on startup before anything else,
-      relaunch overlay if a block is still active
+- [x] Website filtering, both modes, hosts-file based inside delimited markers
+      so an administrator's own entries survive. Blocks bare **and** `www.`
+      forms — blocking one alone does not bite.
+- [x] App blacklist enforced on the monitoring cycle. Blocking a launch means
+      terminating shortly after start; there is no pre-launch hook without a
+      kernel driver.
+- [x] Dialog exe — spawned like a script, answer returned as an exit code
+- [x] Overlay exe — fullscreen single-monitor, topmost re-assert every 500ms,
+      Task Manager policy toggled and **always restored**, even on a crash
+- [x] `%ProgramData%` state store, HMAC-protected, atomic writes,
+      **fails closed** on tampering
+- [x] 2-hour continuous-block cap
+- [x] Watchdogs: agent polls every 30s **and** `client/watchdog.py` runs from a
+      Scheduled Task every 5 minutes, covering the agent itself having hung
+- [x] Reboot handling: `check_on_startup` re-applies an active block before
+      anything else, with no Engine needed
+- [x] Watchdog runs outside the connection loop — a machine does not become
+      unrestricted because the network went down
 
 ### Packaging
-- [ ] Bundle pinned embeddable Python — **same pinned version as the Admin bundle**
-- [ ] `install_service.py` (pywin32 or NSSM), auto-start, registers the
-      watchdog Scheduled Task in the same installer step
-- [ ] Tests
+- [ ] **Bundle pinned embeddable Python — blocked on [issues.md](issues.md) A5.**
+      Which distribution to use depends on whether your scripts need
+      third-party packages. Until then the agent falls back to the running
+      interpreter and logs a warning.
+- [ ] Freeze `dialog_app` / `overlay_app` into executables — same blocker;
+      they run as modules meanwhile
+- [x] `install_service.py` — service registration, `%ProgramData%` ACLs, and
+      the watchdog Scheduled Task in one step
+- [x] Tests — 161 passing overall
+
+**Not verified live, deliberately:** the lockout overlay and the warning dialog
+were never launched on this machine. The overlay takes over the full screen and
+disables Task Manager; running it uninvited is disruptive enough to be your
+call. Their scheduling, capping, tamper-detection and fail-closed logic is
+covered by tests — only the on-screen rendering is unverified.
 
 ---
 

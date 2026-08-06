@@ -33,6 +33,13 @@ _PACKAGE_DIR: Final[Path] = Path(__file__).resolve().parent
 # Phase 4 packaging step — check exists() before use.
 BUNDLED_PYTHON_PATH: Final[Path] = _PACKAGE_DIR / "runtime" / "python.exe"
 
+# The two on-demand helper executables. Both are spawned like scripts rather
+# than run in-process, so neither can block the agent's event loop. Absent
+# until the Phase 4 packaging step; the agent falls back to running the modules
+# directly and says so loudly.
+DIALOG_EXE_PATH: Final[Path] = _PACKAGE_DIR / "bin" / "labmonitor-dialog.exe"
+OVERLAY_EXE_PATH: Final[Path] = _PACKAGE_DIR / "bin" / "labmonitor-overlay.exe"
+
 # Security-sensitive local state: the derived auth key and the tamper-protected
 # lockout schedule. %ProgramData%, never %APPDATA% — it must not be writable by
 # the logged-in user (README "Local State").

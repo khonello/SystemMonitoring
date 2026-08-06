@@ -10,6 +10,10 @@ after its phase is finished, or if it blocks a phase from starting.
 **[Section A](#a--needs-your-decision) needs your decision** — those cannot be
 resolved by writing code. Sections B and C are engineering work.
 
+Phases 0–4 are complete apart from packaging, which is blocked on A5. Resolved
+items stay in section B rather than being deleted, so the reasoning behind each
+decision survives.
+
 ---
 
 ## A — Needs your decision
@@ -204,12 +208,53 @@ an admin, and issue commands.
 
 **Run it only on an isolated or trusted network until Phase 6.**
 
-### C2. Bundled Python distribution choice undecided — *blocks part of Phase 4*
+### C2. Bundled Python distribution choice undecided — *blocks Phase 4 packaging*
 
-Waiting on A5. Until the bundle exists, `admin_gui/validation.py` falls back to
-the running interpreter and logs a warning — which means a script can validate
-against one Python version and execute on another. That fallback is a
-development convenience, not something to ship.
+Waiting on A5. This is now the **only** thing left in Phase 4.
+
+Three fallbacks are live because the bundle does not exist yet, each logging a
+warning: `admin_gui/validation.py` and `client/executor.py` both fall back to
+the running interpreter, and `client/lockout.py` runs the overlay as a module
+instead of an executable. All three are development conveniences, not shippable.
+
+Note the choice interacts with the helper executables: the dialog and overlay
+use tkinter, which the *embeddable* Python distribution does not include. If
+you go embeddable, those two need freezing with PyInstaller separately, or
+rewriting against the Win32 API directly.
+
+### C9. Whitelist mode cannot be fully expressed in a hosts file — *new, from Phase 4*
+
+Website filtering rewrites the hosts file. That works cleanly for blacklist
+mode, which is the documented default. Whitelist mode is a poorer fit: a hosts
+file has no "deny everything except" entry, so what actually gets written is
+the set of domains the Engine listed as *not* permitted.
+
+For the exam-session use case the README describes, that means the Engine has
+to send a meaningful blocklist rather than just the allowed domain. A local
+proxy would express whitelist properly and filter by URL path, at the cost of
+shipping and supervising another service on every lab machine.
+
+Also inherent to the hosts-file approach: it matches whole domains only, and a
+browser using DNS-over-HTTPS bypasses it entirely.
+
+### C10. The lockout overlay and dialog have never been run — *new, from Phase 4*
+
+Their logic is tested — scheduling, the 2-hour cap, tamper detection, fail-closed
+behaviour, watchdog enforcement. What has not been exercised is the on-screen
+result: the fullscreen overlay actually appearing, the topmost re-assert
+holding against Alt-Tab, and the Task Manager policy applying and being
+restored.
+
+They were not launched because doing so takes over the whole screen and
+disables Task Manager on a working machine. Run them yourself when convenient:
+
+```powershell
+python -m client.dialog_app --message "Test warning" --timeout 15 --allow-cancel
+python -m client.overlay_app --until 2026-08-06T12:00:00Z   # use a near-future time
+```
+
+The overlay closes itself at its `--until` time, and the countdown is visible,
+so it cannot strand you.
 
 ### C3. Transport is unencrypted
 

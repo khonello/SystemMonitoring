@@ -246,10 +246,16 @@ CREATE TABLE clients (
 );
 
 -- Application logs
+-- `pid` was added during implementation: the client already sends it in every
+-- APP_DATA entry, and it is the only way to tell two runs of the same
+-- executable apart. `end_time` is nullable and currently unused — these rows
+-- are periodic samples rather than sessions, so duration is derived as
+-- (latest sample - start_time) at query time.
 CREATE TABLE app_logs (
     id INTEGER PRIMARY KEY,
     client_id TEXT,
     process_name TEXT,
+    pid INTEGER,
     window_title TEXT,
     start_time TIMESTAMP,
     end_time TIMESTAMP,
@@ -304,7 +310,7 @@ CREATE TABLE command_log (
 **Technology**: Python, targeting Windows (client is Windows-only for now). Ships with a bundled, pinned embeddable Python distribution — see Bundled Runtime & Script Validation below — so script execution/validation never depends on a system-installed interpreter.
 
 **Concurrency Model**:
-Same rule as the Engine: asyncio for anything that can signal readiness (socket I/O, subprocess execution via `asyncio.create_subprocess_shell`), threads only for calls that can't. `psutil.process_iter()` is a synchronous, potentially slow call with no async equivalent — running it directly inside an async function would stall the event loop and could cause missed heartbeats. It must be offloaded with `asyncio.to_thread(collect_process_data)` rather than awaited inline.
+Same rule as the Engine: asyncio for anything that can signal readiness (socket I/O, subprocess execution via `asyncio.create_subprocess_exec`), threads only for calls that can't. Note `_exec` rather than `_shell`: scripts are launched as an explicit argv against the bundled interpreter, never handed to a shell for interpretation. `psutil.process_iter()` is a synchronous, potentially slow call with no async equivalent — running it directly inside an async function would stall the event loop and could cause missed heartbeats. It must be offloaded with `asyncio.to_thread(collect_process_data)` rather than awaited inline.
 
 **Operating Modes**:
 - Background service/daemon
@@ -504,7 +510,8 @@ Ordinary app preferences — last-connected Engine address, window layout, a cac
 - **Network usage**: Every 60 seconds
 - **Heartbeat**: Every 15 seconds
 - **USB events**: On detection (event-driven)
-- **Idle time**: Every 30 seconds
+- **Idle time**: Reported with every heartbeat, so every 15 seconds rather than
+  30 — it is a single integer and rides along in a message already being sent
 
 ### Bundled Runtime & Script Validation
 
@@ -675,9 +682,10 @@ Some admin-defined scripts return quickly; others run indefinitely. Blocking on 
 - [ ] Test command reliability
 
 **Days 4-5: Access Control**
-- [ ] Website blocking mechanism (hosts file or proxy)
+- [ ] Website blocking mechanism (hosts file or proxy), both blacklist and whitelist modes
 - [ ] Time-based access restrictions
-- [ ] Application whitelist/blacklist
+- [ ] Application **blacklist** — whitelisting applications was considered and
+      rejected; see "Application Management" under Access Control for why
 - [ ] Policy enforcement
 
 **Days 6-7: Testing**
@@ -960,7 +968,9 @@ Everything else in this document — monitoring, script execution, time-based lo
 
 Simple by design, appropriate for project scope:
 
-- The admin holds one **master secret**, generated once, never transmitted over the wire and never stored as-is on any client machine.
+- One **master secret**, generated once, never transmitted over the wire and never stored as-is on any client machine.
+
+  **Both the Engine and the Admin need it**, for different reasons: the Admin computes each client's derived key at provisioning time, and the Engine independently re-derives it to verify the handshake. The architecture diagram above shows it on the Engine; this section originally described it as the admin's alone. Both are correct, and the implication is worth stating plainly — the secret exists in two places, so compromising *either* machine compromises the whole fleet. Reducing that to one copy (for example, having the Engine perform provisioning so the Admin never holds it) is a design question still open — see `issues.md` A6.
 - Each client is issued a **derived key** at provisioning time: `client_key = HMAC(master_secret, client_id)`. This is computed once (by the admin, baked into that client's install package) and stored locally under `%ProgramData%` with ACLs restricting write access to the client agent's service account — the same storage pattern already used for the overlay's lockout schedule.
 - **Session handshake** (replaces the current trust-whatever-`client_id`-is-sent `REGISTER` flow): the server issues a nonce/challenge on connection; the client responds with `HMAC(client_key, nonce)`. The server independently derives the same `client_key` from its master secret and the claimed `client_id`, and accepts the connection only if the response matches. A rogue socket cannot fake this without possessing the derived key.
 - **Why derive rather than share one secret everywhere**: if a single client machine is compromised and its key extracted, only that client's key is exposed — the master secret and every other client's key remain safe. A single shared secret across the fleet would mean one compromised lab machine burns every client.
