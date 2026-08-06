@@ -38,6 +38,12 @@ client/runtime/
 *.key
 master_secret*
 
+# TLS material. The private key is secret; the certificate is public but still
+# deployment-specific, and a committed one invites everyone to share a single
+# Engine identity. Generate per deployment with `python -m scripts.generate_cert`.
+certs/
+*.pem
+
 # Packaging artefacts
 build/
 dist/

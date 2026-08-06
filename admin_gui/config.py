@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Final
 
 from common.constants import DEFAULT_ENGINE_PORT
+from common.tls import default_cert_path
 
 ORGANISATION: Final[str] = "SystemMonitoring"
 APPLICATION: Final[str] = "LabMonitorAdmin"
@@ -42,3 +43,21 @@ MAX_LIVE_SAMPLES: Final[int] = 200
 
 SETTINGS_HOST: Final[str] = "engine/host"
 SETTINGS_PORT: Final[str] = "engine/port"
+
+# --- TLS -------------------------------------------------------------------
+#
+# Same pinned Engine certificate the Client Agent uses. Presence-based, so an
+# admin console cannot end up talking plaintext to a TLS Engine by omission.
+_REPO_ROOT: Final[Path] = _PACKAGE_DIR.parent
+
+TLS_CERT_PATH: Final[Path] = Path(
+    os.environ.get("ADMIN_TLS_CERT", default_cert_path(_REPO_ROOT))
+)
+
+_tls_override: Final[str] = os.environ.get("ADMIN_TLS", "").strip().lower()
+
+TLS_ENABLED: Final[bool] = (
+    False if _tls_override in {"0", "false", "no", "off"}
+    else True if _tls_override in {"1", "true", "yes", "on"}
+    else TLS_CERT_PATH.exists()
+)

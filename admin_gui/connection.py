@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 from typing import Any, Awaitable, Callable
 
-from admin_gui.config import ADMIN_ID
+from admin_gui.config import ADMIN_ID, TLS_CERT_PATH, TLS_ENABLED
 from common.constants import (
     HEARTBEAT_INTERVAL,
     MSG_ADMIN_COMMAND,
@@ -38,6 +39,7 @@ from common.protocol import (
     encode_message,
     get_payload,
 )
+from common.tls import TLS_IDENTITY, TLSConfigurationError, client_context
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +64,30 @@ class EngineConnection:
         return self._writer is not None and not self._writer.is_closing()
 
     async def connect(self, host: str, port: int) -> bool:
-        """Open a connection and complete registration."""
+        """Open a connection and complete registration.
+
+        Under TLS the Engine's certificate is verified against the pinned copy,
+        with `server_hostname` set to the Engine's fixed identity rather than
+        `host`, so verification survives the Engine changing address.
+        """
+        try:
+            context = client_context(TLS_CERT_PATH) if TLS_ENABLED else None
+        except TLSConfigurationError as exc:
+            logger.error("TLS is unusable, refusing to connect in plaintext: %s", exc)
+            return False
+
         try:
             self._reader, self._writer = await asyncio.open_connection(
-                host, port, limit=STREAM_LIMIT
+                host, port,
+                limit=STREAM_LIMIT,
+                ssl=context,
+                server_hostname=TLS_IDENTITY if context else None,
             )
-        except OSError as exc:
+        except ssl.SSLCertVerificationError as exc:
+            logger.error("Engine certificate rejected at %s:%s - %s", host, port, exc)
+            self._reader = self._writer = None
+            return False
+        except (OSError, ssl.SSLError) as exc:
             logger.error("Connection to %s:%s failed: %s", host, port, exc)
             self._reader = self._writer = None
             return False

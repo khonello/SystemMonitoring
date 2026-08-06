@@ -1039,7 +1039,17 @@ A `DEV_BYPASS_AUTH` flag allows the entire handshake — not just its validation
 - Must default to `False`/off. Must be loud about its state — e.g. logged prominently on Engine startup (`"⚠ AUTH BYPASS ACTIVE — DO NOT USE ON A REAL NETWORK"`) — and should require deliberate per-run activation rather than being a setting that can persist quietly in a config file and be forgotten.
 
 #### Data Protection
-- Transport is currently unencrypted (plain JSON over TCP) — sniffable on the LAN even after auth is added. TLS is listed under Future Enhancements; for anything beyond a classroom demo this should be treated as a near-term follow-up to auth, not an indefinitely deferred one.
+
+**Transport is encrypted with TLS.** This was originally deferred to Future Enhancements, on the reasoning that authentication mattered more; that was half right. Auth stops impersonation but does nothing for confidentiality, so without TLS every script, screen capture and lockout schedule stayed readable to anyone on the LAN. Both are needed, and TLS turned out to be small because all transport funnels through three call sites.
+
+- **Self-signed and pinned.** There is exactly one server, and every client gets an install package anyway, so a certificate authority buys nothing. Clients trust the Engine's certificate and nothing else — strictly narrower than trusting a CA that could sign others. A small internal CA is the upgrade path if certificate rotation ever becomes routine.
+- **Identity is a name, not an address.** The certificate is issued for `labmonitor-engine`, and clients pass that as `server_hostname` while dialling whatever IP the Engine has. Hostname verification therefore stays **on** — the usual reason people disable it is a server whose address changes, and this removes that reason. A lab Engine on DHCP can move without reissuing anything.
+- **Fails loudly.** A missing or unreadable certificate stops the Engine starting rather than silently falling back to plaintext; a client that cannot build a TLS context refuses to connect rather than downgrading. Silent downgrade is how a system ends up unencrypted while everyone believes otherwise.
+- **Presence-based.** Once certificates exist, TLS is on. There is no flag to forget. `ENGINE_TLS=0` disables it deliberately for local debugging, and the startup log always states which mode is active.
+
+Generate the certificate with `python -m scripts.generate_cert`. The private key stays on the Engine; `engine-cert.pem` is distributed to clients and is public by design.
+
+Remaining transport-level work:
 - Sanitize all inputs to prevent injection attacks
 - Limit command execution privileges
 
@@ -2034,7 +2044,7 @@ The following features were excluded to maintain project scope and timeline:
 
 ### Future Enhancements (Post-Project)
 If time permits or for future versions:
-- Encrypted communication (TLS)
+- ~~Encrypted communication (TLS)~~ — **implemented**, see Data Protection above
 - Web-based dashboard option
 - Mobile admin app
 - Advanced reporting with charts

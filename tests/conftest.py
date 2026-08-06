@@ -9,6 +9,26 @@ from engine import main as engine_main
 
 
 @pytest.fixture(autouse=True)
+def plaintext_by_default(monkeypatch):
+    """Run protocol tests without TLS unless a test asks for it.
+
+    TLS is presence-based: once certificates exist on the machine, clients
+    enable it automatically. That is right for a deployment and wrong for tests
+    that stand up their own plaintext server — a developer who had generated
+    certificates would see the whole suite fail for reasons unrelated to what
+    it is testing.
+
+    Transport encryption has its own coverage in test_tls.py, and
+    test_integration.py opts back in for one end-to-end run over TLS.
+
+    Patched on the *connection* modules, not on config: both import the flag by
+    value at import time, so patching config alone would have no effect.
+    """
+    monkeypatch.setattr("client.connection.TLS_ENABLED", False)
+    monkeypatch.setattr("admin_gui.connection.TLS_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def fresh_shutdown_event():
     """Give each test its own Engine shutdown event.
 

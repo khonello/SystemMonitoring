@@ -47,7 +47,11 @@ from engine.config import (
     RETENTION_DAYS,
     SERVER_HOST,
     SERVER_PORT,
+    TLS_CERT_PATH,
+    TLS_ENABLED,
+    TLS_KEY_PATH,
 )
+from common.tls import describe, server_context
 from engine.protocol import close_writer, read_message, write_message
 
 logger = logging.getLogger(__name__)
@@ -327,11 +331,21 @@ async def start_server() -> None:
     database.init_database()
     log_auth_state()
 
+    # Built before binding: a TLS misconfiguration should stop the Engine
+    # starting, not surface as a plaintext listener nobody noticed.
+    ssl_context = server_context(TLS_CERT_PATH, TLS_KEY_PATH) if TLS_ENABLED else None
+
+    if TLS_ENABLED:
+        logger.info(describe(True, TLS_CERT_PATH))
+    else:
+        logger.warning(describe(False))
+
     server = await asyncio.start_server(
         handle_client,
         SERVER_HOST,
         SERVER_PORT,
         limit=STREAM_LIMIT,
+        ssl=ssl_context,
     )
 
     bound = ", ".join(str(sock.getsockname()) for sock in server.sockets)

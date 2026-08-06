@@ -12,6 +12,7 @@ from common.constants import (
     HEARTBEAT_INTERVAL,
     NETWORK_DATA_INTERVAL,
 )
+from common.tls import default_cert_path
 from common.utils import generate_client_id
 
 ENGINE_HOST: Final[str] = os.environ.get("ENGINE_HOST", "127.0.0.1")
@@ -24,6 +25,25 @@ NETWORK_INTERVAL: Final[int] = NETWORK_DATA_INTERVAL
 HEARTBEAT_SECONDS: Final[int] = HEARTBEAT_INTERVAL
 
 LOG_LEVEL: Final[str] = os.environ.get("CLIENT_LOG_LEVEL", "INFO")
+
+# --- TLS -------------------------------------------------------------------
+#
+# The Engine's certificate, distributed with the client package. Public by
+# design: pinning it is how the agent recognises the real Engine and refuses
+# anything else, including a certificate signed by a public CA.
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+
+TLS_CERT_PATH: Final[Path] = Path(
+    os.environ.get("CLIENT_TLS_CERT", default_cert_path(_REPO_ROOT))
+)
+
+_tls_override: Final[str] = os.environ.get("CLIENT_TLS", "").strip().lower()
+
+TLS_ENABLED: Final[bool] = (
+    False if _tls_override in {"0", "false", "no", "off"}
+    else True if _tls_override in {"1", "true", "yes", "on"}
+    else TLS_CERT_PATH.exists()
+)
 
 _PACKAGE_DIR: Final[Path] = Path(__file__).resolve().parent
 

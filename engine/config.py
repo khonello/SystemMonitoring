@@ -15,6 +15,7 @@ from common.constants import (
     DEFAULT_ENGINE_PORT,
     HEARTBEAT_TIMEOUT,
 )
+from common.tls import default_cert_path, default_key_path
 
 SERVER_HOST: Final[str] = os.environ.get("ENGINE_HOST", DEFAULT_ENGINE_HOST)
 SERVER_PORT: Final[int] = int(os.environ.get("ENGINE_PORT", DEFAULT_ENGINE_PORT))
@@ -51,6 +52,29 @@ PRUNE_INTERVAL: Final[int] = int(os.environ.get("ENGINE_PRUNE_INTERVAL", 6 * 60 
 PRUNE_BATCH_SIZE: Final[int] = 5_000
 
 LOG_LEVEL: Final[str] = os.environ.get("ENGINE_LOG_LEVEL", "INFO")
+
+# --- TLS -------------------------------------------------------------------
+#
+# Presence-based rather than opt-in: once certificates exist, TLS is on. That
+# way a deployment cannot end up plaintext because someone forgot a flag, and
+# the only route to an unencrypted Engine is deleting the certificate or
+# setting ENGINE_TLS=0 deliberately. Either way the startup log says which.
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+
+TLS_CERT_PATH: Final[Path] = Path(
+    os.environ.get("ENGINE_TLS_CERT", default_cert_path(_REPO_ROOT))
+)
+TLS_KEY_PATH: Final[Path] = Path(
+    os.environ.get("ENGINE_TLS_KEY", default_key_path(_REPO_ROOT))
+)
+
+_tls_override: Final[str] = os.environ.get("ENGINE_TLS", "").strip().lower()
+
+TLS_ENABLED: Final[bool] = (
+    False if _tls_override in {"0", "false", "no", "off"}
+    else True if _tls_override in {"1", "true", "yes", "on"}
+    else TLS_CERT_PATH.exists()
+)
 
 # Read from the environment rather than written as a literal here, deliberately:
 # README "Dev-Mode Auth Bypass" requires this to need per-run activation rather

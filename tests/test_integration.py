@@ -36,8 +36,10 @@ from common.constants import (
     STREAM_LIMIT,
 )
 from common.protocol import create_message, decode_message, encode_message
+from common.tls import CERT_FILE_NAME, KEY_FILE_NAME, TLS_IDENTITY, server_context
 from engine import connection_manager, database
 from engine.main import handle_client
+from scripts.generate_cert import openssl_path
 
 HOST = "127.0.0.1"
 TIMEOUT = 5.0
@@ -423,6 +425,85 @@ async def test_client_cannot_issue_admin_commands(connected_client):
 
     # Still connected, and nothing was routed back to it.
     assert connection_manager.is_connected(CLIENT_ID)
+
+
+# ---------------------------------------------------------------------------
+# TLS — the real client against the real Engine handler, encrypted
+# ---------------------------------------------------------------------------
+#
+# The rest of this module runs plaintext deliberately (see conftest), because
+# it is testing routing rather than transport. These two prove the encrypted
+# path actually works end to end, and that pinning actually refuses an
+# impostor — a TLS layer that accepts anything would pass every other test here.
+
+
+def _generate_cert(directory):
+    from scripts.generate_cert import generate
+
+    assert generate(directory, days=1, identity=TLS_IDENTITY, force=True) == 0
+    return directory / CERT_FILE_NAME, directory / KEY_FILE_NAME
+
+
+@pytest.mark.asyncio
+async def test_client_registers_over_tls(tmp_path_factory, monkeypatch):
+    if openssl_path() is None:
+        pytest.skip("openssl is required to generate a test certificate")
+
+    certfile, keyfile = _generate_cert(tmp_path_factory.mktemp("tls-ok"))
+
+    monkeypatch.setattr("client.connection.TLS_ENABLED", True)
+    monkeypatch.setattr("client.connection.TLS_CERT_PATH", certfile)
+
+    connection_manager.clear()
+    server = await asyncio.start_server(
+        handle_client, HOST, 0,
+        limit=STREAM_LIMIT,
+        ssl=server_context(certfile, keyfile),
+    )
+    port = server.sockets[0].getsockname()[1]
+
+    try:
+        assert await client_connection.connect(HOST, port)
+        assert await client_connection.register()
+        await asyncio.sleep(0.05)
+
+        assert connection_manager.is_connected(CLIENT_ID)
+    finally:
+        await client_connection.close()
+        server.close()
+        await server.wait_closed()
+        connection_manager.clear()
+
+
+@pytest.mark.asyncio
+async def test_client_refuses_an_engine_with_the_wrong_certificate(
+    tmp_path_factory, monkeypatch
+):
+    """Pinning, exercised through the agent's own connect path rather than a
+    bare socket: a machine impersonating the Engine gets refused."""
+    if openssl_path() is None:
+        pytest.skip("openssl is required to generate a test certificate")
+
+    real_cert, _ = _generate_cert(tmp_path_factory.mktemp("tls-real"))
+    fake_cert, fake_key = _generate_cert(tmp_path_factory.mktemp("tls-impostor"))
+
+    # The agent trusts the real Engine; the server it reaches presents another.
+    monkeypatch.setattr("client.connection.TLS_ENABLED", True)
+    monkeypatch.setattr("client.connection.TLS_CERT_PATH", real_cert)
+
+    server = await asyncio.start_server(
+        handle_client, HOST, 0,
+        limit=STREAM_LIMIT,
+        ssl=server_context(fake_cert, fake_key),
+    )
+    port = server.sockets[0].getsockname()[1]
+
+    try:
+        assert await client_connection.connect(HOST, port) is False
+    finally:
+        await client_connection.close()
+        server.close()
+        await server.wait_closed()
 
 
 # ---------------------------------------------------------------------------

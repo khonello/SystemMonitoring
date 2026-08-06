@@ -62,18 +62,8 @@ it is not lost, and how per-machine keys reach 50 lab computers.
 This is a deployment process question rather than a coding one, and it shapes
 what Phase 6 actually has to build. Related: A6.
 
-### A4. Is TLS in scope for your submission?
-
-Transport is plain JSON over TCP. Even after Phase 6 authentication, anyone who
-can observe LAN traffic reads script contents, screenshots and lockout
-schedules.
-
-The README lists TLS under Future Enhancements but also says that for anything
-beyond a classroom demo it should be a near-term follow-up to auth. Whether
-that is in scope depends on how you intend to present and deploy the project.
-
-Default if you do nothing: it stays out of scope, and the limitation is
-documented rather than fixed.
+*(A4 is answered — TLS was brought into scope and implemented. See
+[B12](#b12-transport-encryption--done).)*
 
 *(A5 is answered and has moved to [B11](#b11-script-import-policy--done).)*
 
@@ -175,6 +165,46 @@ Phase 4 monitors.
 
 The Deployment section now says `pip install PySide6 qasync` and uses
 `python -m admin_gui.main`.
+
+### B12. Transport encryption — **DONE** (this was A4 and C3)
+
+TLS on the Engine's listener and both client types. Brought forward rather than
+left in Future Enhancements: authentication stops impersonation but does
+nothing for confidentiality, so without this every script, screen capture and
+lockout schedule stayed readable to anyone on the LAN. It also turned out to be
+small — all transport funnels through three call sites, so the framing,
+protocol and handlers were untouched.
+
+Decisions worth keeping:
+
+- **Self-signed and pinned, not a CA.** One server, and every client gets an
+  install package anyway. Trusting exactly the Engine's certificate is strictly
+  narrower than trusting a CA that could sign others. A small internal CA is
+  the upgrade path if rotation becomes routine.
+- **Identity is a fixed name, not an address.** The certificate is issued for
+  `labmonitor-engine` and clients pass that as `server_hostname` while dialling
+  whatever IP the Engine has. So hostname verification stays **on** — the usual
+  reason to disable it is a server that moves, and this removes that reason.
+  A DHCP Engine can change address without reissuing anything.
+- **Presence-based, not opt-in.** Once certificates exist TLS is on, so a
+  deployment cannot end up plaintext through a forgotten flag. `ENGINE_TLS=0`
+  disables it deliberately, and startup always logs which mode is active.
+- **Fails loudly.** A bad certificate stops the Engine starting; a client that
+  cannot build a context refuses to connect rather than downgrading. Silent
+  downgrade is exactly how a system ends up unencrypted while everyone believes
+  otherwise.
+
+Tested against real handshakes rather than mocks, and the tests assert the
+*failures* as much as the successes — a context with verification quietly
+disabled behaves identically to a correct one until someone is attacked. An
+impostor certificate, a hostname mismatch, an unpinned client and a plaintext
+client are all verified to be refused, both at the context level and through
+the agent's own connect path.
+
+**Still true**: the private key is a secret to protect, and a compromised
+Engine certificate means redistributing to every machine. That is the same
+operational shape as the Phase 6 master secret, so it folds into the same
+install step rather than adding a new one.
 
 ### B11. Script import policy — **DONE** (this was A5)
 
@@ -281,6 +311,9 @@ turned into the whole test suite hanging rather than one test failing.
 
 ### C1. Authentication is a stub that accepts anything — *critical*
 
+*(Note: traffic is now encrypted, but encryption without authentication only
+means an attacker's connection is private too. This is still the blocker.)*
+
 `engine/auth.verify_challenge_response` returns `True` unconditionally, and
 both the client and the admin answer with a fixed placeholder string. The
 handshake's *motions* are real and exercised; its *verification* is not.
@@ -362,10 +395,7 @@ python -m client.dialog_app --message "Test warning" --timeout 15 --allow-cancel
 python -m client.overlay_app --until 2026-08-06T15:00:00Z   # a near-future time
 ```
 
-### C3. Transport is unencrypted
-
-See A4. Recorded separately so it is not lost inside the README's Future
-Enhancements list.
+*(C3, transport being unencrypted, is resolved — see B12.)*
 
 ### C4. Handshake mechanics are untested until auth is switched on
 

@@ -9,10 +9,11 @@ import asyncio
 import logging
 import platform
 import socket
+import ssl
 from typing import Any
 
 from client.auth import compute_challenge_response
-from client.config import CLIENT_ID, ENGINE_HOST, ENGINE_PORT
+from client.config import CLIENT_ID, ENGINE_HOST, ENGINE_PORT, TLS_CERT_PATH, TLS_ENABLED
 from common.constants import (
     MSG_REGISTER,
     MSG_REGISTER_ACK,
@@ -32,6 +33,7 @@ from common.protocol import (
     encode_message,
     get_payload,
 )
+from common.tls import TLS_IDENTITY, TLSConfigurationError, client_context
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +46,44 @@ def is_connected() -> bool:
 
 
 async def connect(host: str = ENGINE_HOST, port: int = ENGINE_PORT) -> bool:
-    """Open a connection to the Engine."""
+    """Open a connection to the Engine.
+
+    Under TLS the certificate is verified against the pinned Engine
+    certificate, and `server_hostname` is the Engine's fixed identity rather
+    than `host` — so hostname checking stays on even though the Engine may sit
+    on a DHCP address that changes.
+    """
     global _reader, _writer
 
     try:
-        _reader, _writer = await asyncio.open_connection(host, port, limit=STREAM_LIMIT)
-    except OSError as exc:
+        context = client_context(TLS_CERT_PATH) if TLS_ENABLED else None
+    except TLSConfigurationError as exc:
+        logger.error("TLS is unusable, refusing to connect in plaintext: %s", exc)
+        return False
+
+    try:
+        _reader, _writer = await asyncio.open_connection(
+            host, port,
+            limit=STREAM_LIMIT,
+            ssl=context,
+            server_hostname=TLS_IDENTITY if context else None,
+        )
+    except ssl.SSLCertVerificationError as exc:
+        # Distinct from a transport failure: this is a machine presenting a
+        # certificate the agent does not trust, which is what pinning exists
+        # to catch. Reconnecting will not fix it.
+        logger.error("Engine certificate rejected at %s:%s - %s", host, port, exc)
+        _reader = _writer = None
+        return False
+    except (OSError, ssl.SSLError) as exc:
         logger.error("Connection to %s:%s failed: %s", host, port, exc)
         _reader = _writer = None
         return False
 
-    logger.info("Connected to Engine at %s:%s", host, port)
+    logger.info(
+        "Connected to Engine at %s:%s (%s)",
+        host, port, "TLS" if context else "plaintext",
+    )
     return True
 
 

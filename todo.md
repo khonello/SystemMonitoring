@@ -304,6 +304,20 @@ SYSTEM. See issues.md C10.
 
 ---
 
+## Phase 4.5 — Transport encryption ✅ (pulled forward from Future Enhancements)
+
+- [x] TLS on the Engine listener and both client types, self-signed and pinned
+- [x] Certificate identity is a fixed name (`labmonitor-engine`), so hostname
+      verification stays on even on a DHCP address
+- [x] `scripts/generate_cert.py` — openssl-backed, no new Python dependency
+- [x] Presence-based enabling: no flag to forget, loud startup log either way
+- [x] Fails closed — bad certificate stops the Engine; a client that cannot
+      build a context refuses rather than downgrading to plaintext
+- [x] 15 TLS tests against real handshakes, asserting refusals as well as
+      successes, plus 2 end-to-end through the agent's own connect path
+- [x] `certs/` and `*.pem` gitignored — the key is secret, the certificate is
+      deployment-specific
+
 ## Phase 5 — Full Integration
 
 - [ ] All three components running together
