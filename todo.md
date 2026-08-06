@@ -1,0 +1,212 @@
+# Implementation Tracker
+
+Ordering follows README → "Development Guidelines → Implementation Approach"
+and "Component build order". Where this conflicts with the 4-week calendar in
+"Implementation Timeline", this ordering wins.
+
+Legend: `[ ]` todo · `[~]` in progress · `[x]` done
+
+---
+
+## Phase 0 — Repo Bootstrap ✅
+
+- [x] `git init` + `.gitignore` (venv, `__pycache__`, `*.db`, `logs/`, bundled
+      runtimes, auth material). No commit made yet.
+- [x] Create package tree per README "Project Structure":
+      `engine/`, `client/monitors/`, `admin_gui/qml/`, `common/`, `tests/`, `docs/`
+- [x] `__init__.py` in every Python package
+- [x] `requirements.txt` — `psutil==7.2.2`, `PySide6==6.11.1`, `pytest==9.1.1`,
+      `pytest-asyncio==1.4.0`; `requirements-client.txt` — `pywin32==312`
+      (Windows-only, not needed until Phase 4)
+- [x] `pyproject.toml` + `pip install -e .` — **pulled forward from Phase 1.**
+      Without it `from common.protocol import ...` fails, because running
+      `python engine/main.py` puts `engine/` on `sys.path`, not the repo root.
+      Also carries the pytest config (`asyncio_mode = "strict"`).
+- [x] Virtualenv (`.venv`, Python 3.10.0) + install, all imports resolve
+
+**Environment note:** development happens on Windows, but the Engine is
+Linux-only by design (asyncio/epoll). The Engine runs under **WSL**
+(Python 3.12.3) while the Client Agent and Admin GUI run on Windows
+(Python 3.10.0). WSL2 localhost forwarding means the Windows client reaches
+the WSL Engine at `127.0.0.1:5000` with no extra configuration — verified in
+Phase 1. The Engine imports only the standard library, so it needs no venv or
+pip install inside WSL; run it with `python3 -m engine.main`.
+
+## Phase 1 — Scaffold Pass (all components, stub behavior) ✅
+
+Goal: a message can travel Admin → Engine → Client and back with every handler
+present but empty. No real logic in this phase.
+
+### common/
+- [x] `constants.py` — message types, ports, intervals, roles, `STREAM_LIMIT`
+- [x] `protocol.py` — `create_message`, newline-delimited JSON encode/decode,
+      envelope validation
+- [x] `utils.py` — timestamp, command-id and client-id helpers
+
+### engine/
+- [x] `config.py` — host, port, DB path, `MAX_CLIENTS`, `HEARTBEAT_TIMEOUT`,
+      `LOG_LEVEL`, `DEV_BYPASS_AUTH` (**default False, env-only**)
+- [x] `main.py` — `asyncio.start_server`, `handle_client`, registration
+      handshake, stale-peer reaper, signal handling
+- [x] **`REGISTER` flow carries nonce/response fields from the start**, with
+      `verify_challenge_response` stubbed to accept, and `DEV_BYPASS_AUTH`
+      skipping the handshake outright before any nonce is sent
+- [x] Startup banner logging loudly when the bypass is active
+- [x] `connection_manager.py` (real registry), `command_handler.py` (dispatch
+      table + routing), `protocol.py` (stream framing)
+- [x] `auth.py` — **not in the README's file tree.** Added so Phase 6 is a swap
+      of two function bodies rather than edits threaded through `main.py`.
+- [x] `database.py` — `get_connection`, `init_database` with the real 5-table
+      schema and indexes; all store/get functions present but stubbed
+- [x] `setup_db.py` — `python -m engine.setup_db [path]`
+
+### client/
+- [x] `config.py` — engine address, `CLIENT_ID`, intervals,
+      `BUNDLED_PYTHON_PATH`, `STATE_DIR`, `SCRIPT_LOG_DIR`
+- [x] `connection.py` — connect, register (both handshake shapes), send/receive,
+      exponential reconnect backoff
+- [x] `auth.py` — **not in the README's file tree**, mirrors `engine/auth.py`
+- [x] `main.py` — four concurrent loops (command listener, monitoring, network,
+      heartbeat) with reconnect; `asyncio.wait(FIRST_COMPLETED)` rather than
+      `gather`, so one dead loop tears the session down instead of hanging
+- [x] `monitors/` — three stub collectors, synchronous by design
+- [x] `executor.py` — dispatch with every command type, all "not implemented";
+      `execute_script` already shaped to *not* await completion
+- [ ] Windows service wrapper — deferred to Phase 4 packaging, not scaffolded
+
+### admin_gui/
+- [x] `main.py`, `backend.py` (signals/slots, no transport), `models.py`
+      (`ClientListModel`)
+- [x] `qml/main.qml`, `ClientList.qml`, `MonitoringPanel.qml`, `CommandPanel.qml`
+      — window opens and lays out, controls call slots that only log
+- [ ] asyncio ↔ Qt event-loop integration — **deliberately not decided**, it is
+      a Phase 3 call that shapes `backend.py`
+
+### tests/
+- [x] `test_protocol.py` — 24 tests, real coverage of the one module with logic
+- [x] `test_engine.py` — connection-registry tests (had real logic); the rest
+      listed as Phase 2 work
+- [x] `test_client.py` — backoff plus stub-contract tests; rest listed as Phase 4
+- [x] `test_integration.py` — **deviation from plan (was to be empty).** The
+      exit criteria *are* an end-to-end round trip, so they are encoded as
+      tests rather than checked once by hand and lost.
+- [x] ~~`pytest.ini` / `pyproject.toml` with asyncio mode configured~~ — Phase 0
+
+### Exit criteria — all met
+- [x] **47 tests passing** (`python -m pytest`)
+- [x] Engine starts under WSL, creates the SQLite schema, logs its auth posture
+- [x] Windows client connects to the WSL Engine, completes the nonce handshake,
+      and registers
+- [x] Heartbeats arrive every 15s and are logged (at DEBUG); APP_DATA and
+      NETWORK_DATA arrive on their own intervals
+- [x] Admin → Engine → Client → Engine → Admin round trip returns
+      `"Not implemented (Phase 1 scaffold)"`
+- [x] Role enforcement holds: a Client Agent sending `ADMIN_COMMAND` is refused
+
+---
+
+## Phase 2 — Engine (full implementation, tested before Phase 3 starts)
+
+- [ ] Connection registry + heartbeat-timeout reaping of dead clients
+- [ ] `database.py` real implementations: `store_client`, `update_client_last_seen`,
+      `store_app_data`, `store_network_data`, `store_usb_event`,
+      `get_client_apps`, `get_network_summary`
+- [ ] All SQL confined to `database.py` (keeps the documented Postgres path open)
+- [ ] Command routing admin → specific client, and `broadcast_command`
+- [ ] `command_log` persistence + status updates
+- [ ] Script lifecycle relay: `COMMAND_ACCEPTED` / `COMMAND_OUTPUT` /
+      `COMMAND_COMPLETE` forwarded to the admin
+- [ ] Data aggregation: 24-hour summaries, weekly rollups
+- [ ] Decide whether SQLite writes need `run_in_executor` under load — measure,
+      don't assume (README "Concurrency Model")
+- [ ] Unit + integration tests, >70% coverage
+- [ ] **Gate: Engine fully tested standalone before Admin work begins**
+
+---
+
+## Phase 3 — Admin GUI (full implementation, tested before Phase 4 starts)
+
+- [ ] PySide6 + QML app shell
+- [ ] **Resolve the asyncio ↔ Qt event-loop integration** (`qasync`, a QTimer
+      pump, or a socket thread) — decide early, it shapes `backend.py`
+- [ ] Socket client to Engine; live client list
+- [ ] Monitoring dashboard with real-time updates via signals/slots
+- [ ] Command panel: script send, screen capture, terminate process/script
+- [ ] Reports viewer (24h / weekly)
+- [ ] Policy editor: website blacklist/whitelist **with the `mode` field explicit**,
+      app blacklist (blacklist-only by design), time schedules
+- [ ] Script pre-send validation via the bundled interpreter (`py_compile`)
+- [ ] Local prefs storage (QSettings or config file — not a database)
+- [ ] Tests
+- [ ] **Gate: Admin fully tested against the completed Engine before Client work begins**
+
+---
+
+## Phase 4 — Client Agent (full implementation)
+
+### Monitoring
+- [ ] Process monitor — `psutil.process_iter` **via `asyncio.to_thread`**, never inline
+- [ ] Network monitor — `net_io_counters` deltas
+- [ ] USB monitor — event-driven, log-only, no blocking
+- [ ] Idle time — Windows `GetLastInputInfo` via ctypes
+
+### Commands
+- [ ] `execute_script` — detached launch, per-`command_id` log file, immediate
+      `COMMAND_ACCEPTED`, no waiting on completion
+- [ ] `tail_log_and_report` — poll on interval, read only when file size grew,
+      one `COMMAND_COMPLETE` on exit, then delete log + temp script
+- [ ] `terminate_script` keyed by `command_id`; `terminate_process` by name
+- [ ] On-arrival script re-validation with the bundled interpreter
+- [ ] Screen capture with compression
+
+### Access control
+- [ ] Website filtering, both modes, hosts-file or proxy based
+- [ ] App blacklist enforcement via existing `TERMINATE_PROCESS`
+- [ ] Dialog exe (shutdown / grace warnings) — spawned on demand, choice
+      reported back via exit code or stdout
+- [ ] Overlay exe — fullscreen single-monitor lockout, topmost re-assert ~500ms,
+      Task Manager policy toggle
+- [ ] `%ProgramData%` state store, ACL-restricted, HMAC-protected, **fails closed**
+- [ ] 2-hour continuous-block cap
+- [ ] Watchdogs: agent polls every 30s **and** an installer-registered Windows
+      Scheduled Task checks every ~5min (covers the agent itself hanging)
+- [ ] Reboot handling: re-read schedule on startup before anything else,
+      relaunch overlay if a block is still active
+
+### Packaging
+- [ ] Bundle pinned embeddable Python — **same pinned version as the Admin bundle**
+- [ ] `install_service.py` (pywin32 or NSSM), auto-start, registers the
+      watchdog Scheduled Task in the same installer step
+- [ ] Tests
+
+---
+
+## Phase 5 — Full Integration
+
+- [ ] All three components running together
+- [ ] Multi-client scenarios (target 10+, design ceiling 50)
+- [ ] Network failure / reconnect behavior
+- [ ] Performance + load testing
+- [ ] **Re-measure client RAM footprint** — README flags the <50MB figure as
+      predating the bundled runtime and helper exes, and explicitly unverified
+
+---
+
+## Phase 6 — Authentication (last, but a hard prerequisite for real deployment)
+
+- [ ] Master secret generation + admin-side storage
+- [ ] Per-client derived keys: `HMAC(master_secret, client_id)`
+- [ ] Provisioning: bake the derived key into each client install package
+- [ ] Replace the Phase 1 stub with real nonce/challenge verification
+- [ ] `DEV_BYPASS_AUTH` confirmed defaulting off, requiring deliberate per-run activation
+- [ ] **Budget real time here**: dev-mode skipped the handshake entirely, so this
+      is the first test of its *mechanics* (ordering, round-trips, blocking), not
+      just its crypto — README "Dev-Mode Auth Bypass", known tradeoff
+- [ ] Rate limiting, admin action audit logging
+
+---
+
+## Deferred / Out of scope
+
+TLS (transport is plaintext JSON even after auth — sniffable on the LAN),
+Postgres migration, and everything under README "Removed Features".

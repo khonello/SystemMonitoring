@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "system-monitoring"
+version = "0.1.0"
+description = "System monitoring and management tool for institutional computer labs"
+requires-python = ">=3.10"
+
+# Runtime dependencies are tracked in requirements.txt / requirements-client.txt
+# rather than here, so the Linux Engine install can skip the Windows-only and
+# GUI-only packages entirely.
+dependencies = []
+
+[tool.setuptools]
+# Four top-level packages, one per deployable unit plus the shared code.
+# Installing this project in editable mode (`pip install -e .`) is what makes
+# `from common.protocol import ...` resolve from every entry point — running
+# `python engine/main.py` directly puts engine/ on sys.path, not the repo root.
+packages = [
+    "common",
+    "engine",
+    "client",
+    "client.monitors",
+    "admin_gui",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Strict mode: async tests must carry an explicit @pytest.mark.asyncio, matching
+# the examples in README "Testing".
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"

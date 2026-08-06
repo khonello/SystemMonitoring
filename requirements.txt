@@ -1,0 +1,18 @@
+# Base development requirements — installable on both Linux (Engine) and
+# Windows (Client Agent, Admin GUI). Requires Python 3.10+.
+#
+# Windows-only client extras live in requirements-client.txt so the Engine's
+# Linux install never sees them.
+
+# Monitoring collectors (Client Agent)
+psutil==7.2.2
+
+# Administrator GUI — Qt 6 + QML.
+# PySide6 is the official Qt-for-Python binding (LGPL). Note that the README's
+# Deployment section still says `pip install PyQt6`; PySide6 is the deliberate
+# choice here.
+PySide6==6.11.1
+
+# Testing
+pytest==9.1.1
+pytest-asyncio==1.4.0

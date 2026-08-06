@@ -1,0 +1,51 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# SQLite database (Engine-owned, never committed)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Per-execution script scratch space (see README "Script Execution Model") —
+# these are deleted by the agent once COMMAND_COMPLETE is sent, but a crashed
+# run can leave them behind.
+logs/
+
+# Bundled, pinned Python runtimes shipped with the Client Agent and Admin GUI
+# installers. Large, platform-specific, fetched at package time — not sources.
+runtime/
+admin_gui/runtime/
+client/runtime/
+
+# Auth material — the master secret and per-client derived keys must never be
+# committed (see README "Authentication: Admin-Derived Per-Client Keys").
+*.secret
+*.key
+master_secret*
+
+# Packaging artefacts
+build/
+dist/
+*.egg-info/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

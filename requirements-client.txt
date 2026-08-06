@@ -1,0 +1,11 @@
+# Client Agent extras — Windows only. Install alongside requirements.txt on
+# lab machines and on the Windows development box:
+#
+#   pip install -r requirements.txt -r requirements-client.txt
+#
+# Not needed until Phase 4 (see todo.md); listed now so the dependency is
+# pinned rather than discovered later.
+
+# Windows service installation and Win32 API access (service registration,
+# scheduled-task registration for the lockout watchdog).
+pywin32==312
