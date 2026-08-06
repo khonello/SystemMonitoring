@@ -2026,39 +2026,53 @@ If time permits or for future versions:
 
 #### Engine Installation (Linux)
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# No runtime dependencies: the Engine is standard library only. Requirements
+# are split per deployable unit so no machine installs what it does not run —
+# requirements.txt carries the test tooling, and the Admin and Client have
+# their own files.
+pip install -r requirements.txt   # only needed to run the test suite
 
 # Initialize database
-python engine/setup_db.py
+python -m engine.setup_db
 
 # Start the Engine
-python engine/main.py
+python -m engine.main
 ```
 
 #### Client Installation (Windows)
 ```powershell
 # Client Agent bundles its own pinned Python runtime and dialog/overlay
 # executables — no reliance on a system-installed interpreter.
+pip install -r requirements-client.txt
 
-# Install as a Windows service (e.g. via pywin32 or NSSM), so the agent
-# auto-starts on boot and re-checks any active lockout schedule on startup
-python client\install_service.py --startup=auto
+# Install as a Windows service, restrict the %ProgramData% state directory,
+# and register the independent lockout watchdog Scheduled Task. Needs an
+# elevated prompt; all three happen in this one step.
+python -m client.install_service --startup auto
 
 # Or run manually for testing
-python client\main.py
+python -m client.main
 ```
+
+The installer applies the `%ProgramData%` ACLs rather than the agent doing it
+at runtime — a process should not be able to widen its own permissions.
 
 #### Admin GUI Installation (Windows)
 ```powershell
-# Install Qt dependencies. PySide6 is the official Qt-for-Python binding
-# (LGPL); qasync integrates asyncio with Qt's event loop so the GUI stays
-# single-threaded, matching the concurrency model used everywhere else.
-pip install PySide6 qasync
+# PySide6 is the official Qt-for-Python binding (LGPL); qasync integrates
+# asyncio with Qt's event loop so the GUI stays single-threaded, matching the
+# concurrency model used everywhere else.
+pip install -r requirements-admin.txt
 
 # Run GUI
 python -m admin_gui.main
 ```
+
+The Client Agent's two helper windows — the warning dialog and the lockout
+overlay — are also QML rather than a second toolkit, so `requirements-client.txt`
+carries PySide6 too. They ship as frozen executables spawned on demand, which
+is why the client's *script-execution* interpreter and its *UI* runtime are
+packaged separately and decided independently.
 
 ### Configuration
 

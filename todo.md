@@ -249,9 +249,15 @@ present but empty. No real logic in this phase.
 - [x] App blacklist enforced on the monitoring cycle. Blocking a launch means
       terminating shortly after start; there is no pre-launch hook without a
       kernel driver.
-- [x] Dialog exe — spawned like a script, answer returned as an exit code
-- [x] Overlay exe — fullscreen single-monitor, topmost re-assert every 500ms,
-      Task Manager policy toggled and **always restored**, even on a crash
+- [x] Dialog window — frameless, translucent, draggable by its own surface,
+      answer returned as an exit code. **QML, not tkinter**: the project is
+      already committed to Qt 6 + QML, and a second toolkit for two windows is
+      not justified — nor does tkinter do frameless/fluid well.
+- [x] Overlay window — scrim over the primary display with a centred panel
+      rather than an opaque takeover, topmost re-assert every 500ms, Task
+      Manager policy toggled and **always restored**, even on a crash
+- [x] `client/ui/` — Theme.qml and ActionButton.qml shared by both, so one
+      easing curve and one palette govern the pair
 - [x] `%ProgramData%` state store, HMAC-protected, atomic writes,
       **fails closed** on tampering
 - [x] 2-hour continuous-block cap
@@ -263,21 +269,26 @@ present but empty. No real logic in this phase.
       unrestricted because the network went down
 
 ### Packaging
-- [ ] **Bundle pinned embeddable Python — blocked on [issues.md](issues.md) A5.**
-      Which distribution to use depends on whether your scripts need
-      third-party packages. Until then the agent falls back to the running
-      interpreter and logs a warning.
-- [ ] Freeze `dialog_app` / `overlay_app` into executables — same blocker;
-      they run as modules meanwhile
+- [ ] **Bundle pinned Python for script execution — blocked on
+      [issues.md](issues.md) A5.** Which distribution depends on whether your
+      scripts need third-party packages. Until then the agent falls back to the
+      running interpreter and logs a warning.
+- [ ] Freeze the helper windows into **one** executable with a mode flag, so
+      the Qt payload is paid for once rather than twice. Independent of A5 —
+      an embeddable distribution could never carry PySide6 anyway.
 - [x] `install_service.py` — service registration, `%ProgramData%` ACLs, and
       the watchdog Scheduled Task in one step
 - [x] Tests — 161 passing overall
 
-**Not verified live, deliberately:** the lockout overlay and the warning dialog
-were never launched on this machine. The overlay takes over the full screen and
-disables Task Manager; running it uninvited is disruptive enough to be your
-call. Their scheduling, capping, tamper-detection and fail-closed logic is
-covered by tests — only the on-screen rendering is unverified.
+**Verified live:** the dialog rendered, counted down and returned exit code 2
+(timed out); the overlay covered the primary display for its full window,
+self-closed and exited 0. Neither produced a QML error.
+
+**Still unverified:** the Task Manager policy. This machine denies the registry
+write (group policy owns the key), so the overlay degrades to a plain
+fullscreen window — intended behaviour, but it means enable-and-restore has
+never actually run. Confirm on a real lab machine where the agent runs as
+SYSTEM. See issues.md C10.
 
 ---
 

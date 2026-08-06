@@ -217,10 +217,22 @@ warning: `admin_gui/validation.py` and `client/executor.py` both fall back to
 the running interpreter, and `client/lockout.py` runs the overlay as a module
 instead of an executable. All three are development conveniences, not shippable.
 
-Note the choice interacts with the helper executables: the dialog and overlay
-use tkinter, which the *embeddable* Python distribution does not include. If
-you go embeddable, those two need freezing with PyInstaller separately, or
-rewriting against the Win32 API directly.
+**The helper windows are now QML, which narrows this rather than widening it.**
+They were briefly tkinter; that was a bad call, introducing a second UI toolkit
+into a project already committed to Qt 6 + QML, and one that fights the
+frameless translucent design the README describes.
+
+The two concerns stay independent, which is what keeps A5 answerable:
+
+- **Script-execution runtime** — a plain interpreter running admin-authored
+  scripts. Embeddable is still viable *if* your scripts are stdlib-only. This
+  is what A5 actually decides.
+- **Helper windows** — frozen with PyInstaller, carrying their own Qt. Not
+  affected by the A5 answer either way, because an embeddable distribution has
+  no pip and so could never have carried PySide6.
+
+Build both helpers as **one** binary with a mode flag, so the Qt payload is
+paid for once rather than twice.
 
 ### C9. Whitelist mode cannot be fully expressed in a hosts file — *new, from Phase 4*
 
@@ -237,24 +249,31 @@ shipping and supervising another service on every lab machine.
 Also inherent to the hosts-file approach: it matches whole domains only, and a
 browser using DNS-over-HTTPS bypasses it entirely.
 
-### C10. The lockout overlay and dialog have never been run — *new, from Phase 4*
+### C10. Task Manager hardening is unverified on a managed machine — *narrowed*
 
-Their logic is tested — scheduling, the 2-hour cap, tamper detection, fail-closed
-behaviour, watchdog enforcement. What has not been exercised is the on-screen
-result: the fullscreen overlay actually appearing, the topmost re-assert
-holding against Alt-Tab, and the Task Manager policy applying and being
-restored.
+Both helper windows have now been run for real. The dialog rendered, counted
+down and returned exit code 2 (timed out) as designed; the overlay covered the
+primary display for its full window, self-closed and exited 0. Neither produced
+a QML error.
 
-They were not launched because doing so takes over the whole screen and
-disables Task Manager on a working machine. Run them yourself when convenient:
+What remains unverified is the Task Manager policy. On this development machine
+the `DisableTaskMgr` write fails with access denied — group policy owns that
+key — so the overlay degrades to a plain fullscreen window and logs one line.
+That degradation is the intended behaviour (losing the hardening must never
+stop the lockout showing), but it means the enable-and-restore path has never
+actually run.
+
+Worth confirming on a real lab machine, where the agent runs as a service under
+SYSTEM and should be able to write it. Check both directions: that Task Manager
+is blocked during a block window, and that it works again afterwards.
+
+Also still unverified: whether the 500ms topmost re-assert genuinely wins
+against a determined Alt-Tab. Observable only by trying it.
 
 ```powershell
 python -m client.dialog_app --message "Test warning" --timeout 15 --allow-cancel
-python -m client.overlay_app --until 2026-08-06T12:00:00Z   # use a near-future time
+python -m client.overlay_app --until 2026-08-06T15:00:00Z   # a near-future time
 ```
-
-The overlay closes itself at its `--until` time, and the countdown is visible,
-so it cannot strand you.
 
 ### C3. Transport is unencrypted
 

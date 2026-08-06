@@ -16,6 +16,12 @@ Phases 0–4 are complete: Engine, Admin GUI and Client Agent are all implemente
 
 Run everything through the venv. The project is installed editable, which is what makes `from common.protocol import ...` resolve from every entry point.
 
+Requirements are split per deployable unit — the Engine is standard-library only, so a Linux install pulls nothing. A dev box runs the whole suite and needs all three files:
+
+```powershell
+pip install -r requirements.txt -r requirements-admin.txt -r requirements-client.txt
+```
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q                    # 161 tests
 .\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common --cov=admin_gui
@@ -23,6 +29,8 @@ Run everything through the venv. The project is installed editable, which is wha
 .\.venv\Scripts\python.exe -m client.main                  # Client Agent
 .\.venv\Scripts\python.exe -m admin_gui.main               # Administrator GUI
 ```
+
+Both client helper windows are QML (`client/ui/`), matching the Admin GUI — don't reintroduce a second toolkit. `LABMONITOR_UI_HEADLESS=1` loads and validates their QML without showing anything, which is how to check a change without taking over the screen.
 
 **The Engine runs under WSL**, not Windows — it is Linux-only by design (asyncio/epoll). It imports only the standard library, so WSL needs no venv:
 
