@@ -86,6 +86,11 @@ async def heartbeat_loop() -> None:
     """Send liveness beats so the Engine does not reap this connection."""
     while not _shutdown.is_set():
         try:
+            # Pause state rides along with the heartbeat the agent already
+            # sends, so the Admin GUI learns when a pause is due to lapse from
+            # the client's own state rather than assuming its command stuck.
+            pause_until = lockout.pause_expires_at()
+
             await connection.send(
                 create_message(
                     MSG_HEARTBEAT,
@@ -93,6 +98,8 @@ async def heartbeat_loop() -> None:
                         "status": "active",
                         "idle_time": get_idle_time(),
                         "screen_locked": is_screen_locked(),
+                        "paused": pause_until is not None,
+                        "pause_until": pause_until.isoformat() if pause_until else None,
                     },
                     client_id=CLIENT_ID,
                 )

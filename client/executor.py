@@ -25,6 +25,8 @@ import psutil
 from client import connection, lockout, policy
 from client.config import BUNDLED_PYTHON_PATH, CLIENT_ID, SCRIPT_LOG_DIR
 from common.constants import (
+    DEFAULT_SCRIPT_TIMEOUT,
+    MAX_SCRIPT_TIMEOUT,
     MSG_COMMAND_ACCEPTED,
     MSG_COMMAND_COMPLETE,
     MSG_COMMAND_OUTPUT,
@@ -32,15 +34,18 @@ from common.constants import (
     MSG_EXECUTE_SCRIPT,
     MSG_SCREEN_CAPTURE,
     MSG_SET_APP_BLACKLIST,
+    MSG_SET_PAUSE,
     MSG_SET_TIME_RESTRICTION,
     MSG_SET_WEBSITE_POLICY,
     MSG_SHOW_DIALOG,
     MSG_TERMINATE_PROCESS,
     MSG_TERMINATE_SCRIPT,
+    SCRIPT_KILL_GRACE,
     SCRIPT_TYPE_POWERSHELL,
     SCRIPT_TYPE_PYTHON,
     STATUS_ERROR,
     STATUS_SUCCESS,
+    STATUS_TIMEOUT,
 )
 from common.protocol import create_message, get_payload
 
@@ -78,7 +83,36 @@ def python_interpreter() -> str:
 # ---------------------------------------------------------------------------
 
 
-async def execute_script(command_id: str, script: str, script_type: str) -> None:
+def clamp_timeout(requested: Any) -> int:
+    """Resolve a requested script timeout to an enforceable one.
+
+    Falls back to the default for anything missing or unparseable, and clamps
+    to the ceiling so an admin cannot opt out of the cap entirely.
+    """
+    try:
+        seconds = int(requested)
+    except (TypeError, ValueError):
+        return DEFAULT_SCRIPT_TIMEOUT
+
+    if seconds <= 0:
+        return DEFAULT_SCRIPT_TIMEOUT
+
+    if seconds > MAX_SCRIPT_TIMEOUT:
+        logger.warning(
+            "Script timeout %ss exceeds the %ss ceiling; clamping",
+            seconds, MAX_SCRIPT_TIMEOUT,
+        )
+        return MAX_SCRIPT_TIMEOUT
+
+    return seconds
+
+
+async def execute_script(
+    command_id: str,
+    script: str,
+    script_type: str,
+    timeout: int = DEFAULT_SCRIPT_TIMEOUT,
+) -> None:
     """Launch a script detached from the response cycle."""
     SCRIPT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -110,14 +144,18 @@ async def execute_script(command_id: str, script: str, script_type: str) -> None
     await connection.send(
         create_message(
             MSG_COMMAND_ACCEPTED,
-            {"command_id": command_id, "log_path": str(log_path)},
+            {
+                "command_id": command_id,
+                "log_path": str(log_path),
+                "timeout_seconds": timeout,
+            },
             client_id=CLIENT_ID,
             command_id=command_id,
         )
     )
 
     asyncio.create_task(
-        tail_log_and_report(command_id, log_path, script_path, process),
+        tail_log_and_report(command_id, log_path, script_path, process, timeout),
         name=f"tail-{command_id}",
     )
 
@@ -176,14 +214,20 @@ async def tail_log_and_report(
     log_path: Path,
     script_path: Path,
     process: asyncio.subprocess.Process,
+    timeout: int = DEFAULT_SCRIPT_TIMEOUT,
 ) -> None:
     """Stream a running script's output, then clean up after it exits.
 
     Polls on a fixed interval and only reads when the file has actually grown,
-    so a silent long-running script costs one stat() per tick rather than a
-    reopen-and-read.
+    so a silent script costs one stat() per tick rather than a reopen-and-read.
+
+    Also enforces the execution cap. Predefined scripts are extensions for
+    small routine tasks; one that overruns is stopped rather than left running
+    on a lab machine indefinitely.
     """
     position = 0
+    deadline = asyncio.get_running_loop().time() + timeout
+    timed_out = False
 
     try:
         while True:
@@ -196,7 +240,12 @@ async def tail_log_and_report(
                 await asyncio.wait_for(process.wait(), timeout=0.01)
                 break
             except asyncio.TimeoutError:
-                continue
+                pass
+
+            if asyncio.get_running_loop().time() >= deadline:
+                timed_out = True
+                await _stop_overrunning(command_id, process, timeout)
+                break
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -211,16 +260,54 @@ async def tail_log_and_report(
 
         running_scripts.pop(command_id, None)
 
-        await _send_complete(
-            command_id,
-            STATUS_SUCCESS if process.returncode == 0 else STATUS_ERROR,
-            f"Exited with code {process.returncode}",
-            process.returncode,
-        )
+        if timed_out:
+            status = STATUS_TIMEOUT
+            message = f"Stopped after exceeding the {timeout}s execution limit"
+        elif process.returncode == 0:
+            status = STATUS_SUCCESS
+            message = "Exited with code 0"
+        else:
+            status = STATUS_ERROR
+            message = f"Exited with code {process.returncode}"
+
+        await _send_complete(command_id, status, message, process.returncode)
 
         # Per-execution scratch space, not a durable record — cleared once the
         # output has been reported.
         _cleanup(log_path, script_path)
+
+
+async def _stop_overrunning(
+    command_id: str,
+    process: asyncio.subprocess.Process,
+    timeout: int,
+) -> None:
+    """Stop a script that has exceeded its execution cap.
+
+    Asks first, then forces. The distinction is mostly academic on Windows,
+    where both terminate() and kill() map to TerminateProcess and the child
+    gets no cleanup opportunity either way — which is exactly why scripts run
+    under this mechanism should be safely interruptible.
+    """
+    logger.warning("Script %s exceeded its %ss limit; stopping it", command_id, timeout)
+
+    try:
+        process.terminate()
+    except (ProcessLookupError, OSError):
+        return
+
+    try:
+        await asyncio.wait_for(process.wait(), timeout=SCRIPT_KILL_GRACE)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    logger.warning("Script %s ignored terminate; killing it", command_id)
+    try:
+        process.kill()
+        await process.wait()
+    except (ProcessLookupError, OSError):
+        pass
 
 
 async def _drain(command_id: str, log_path: Path, position: int) -> int:
@@ -457,7 +544,10 @@ async def handle_command(message: dict[str, Any]) -> None:
 
     if command_type == MSG_EXECUTE_SCRIPT:
         await execute_script(
-            command_id, payload.get("script", ""), payload.get("script_type", "")
+            command_id,
+            payload.get("script", ""),
+            payload.get("script_type", ""),
+            clamp_timeout(payload.get("timeout_seconds")),
         )
         return
 
@@ -506,6 +596,9 @@ async def _run_command(command_type: str, payload: dict[str, Any]) -> dict[str, 
 
     if command_type == MSG_SET_TIME_RESTRICTION:
         return await asyncio.to_thread(lockout.apply_command, payload)
+
+    if command_type == MSG_SET_PAUSE:
+        return await asyncio.to_thread(lockout.apply_pause_command, payload)
 
     if command_type == MSG_SHOW_DIALOG:
         return await show_dialog(

@@ -126,7 +126,9 @@ Window {
 
                     Text {
                         Layout.fillWidth: true
-                        text: "Lab access is restricted"
+                        text: bridge.paused
+                            ? "Screen paused"
+                            : "Lab access is restricted"
                         color: theme.textPrimary
                         font.pixelSize: 21
                         font.family: "Segoe UI"
@@ -135,7 +137,9 @@ Window {
                     }
 
                     Text {
-                        text: "Scheduled restriction period"
+                        text: bridge.paused
+                            ? "Paused by a lab supervisor"
+                            : "Scheduled restriction period"
                         color: theme.textMuted
                         font.pixelSize: 12
                         font.family: "Segoe UI"
@@ -159,10 +163,12 @@ Window {
                 wrapMode: Text.Wrap
             }
 
+            // Scheduled block: a real countdown, because there is a known end.
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.topMargin: 4
                 spacing: 8
+                visible: !bridge.paused
 
                 Text {
                     text: "Access returns in"
@@ -198,10 +204,62 @@ Window {
                 }
             }
 
+            // Pause: no countdown, deliberately. There is no deadline to show,
+            // and the internal one-hour fail-safe is an admin safety net, not
+            // a promise to the student. An indeterminate bar communicates
+            // "held, indefinitely" without inventing a number.
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                spacing: 10
+                visible: bridge.paused
+
+                Rectangle {
+                    id: track
+                    Layout.fillWidth: true
+                    height: 4
+                    radius: 2
+                    color: theme.raised
+                    clip: true
+
+                    Rectangle {
+                        id: sweep
+                        width: parent.width * 0.32
+                        height: parent.height
+                        radius: parent.radius
+                        color: theme.accent
+
+                        SequentialAnimation on x {
+                            running: bridge.paused
+                            loops: Animation.Infinite
+
+                            NumberAnimation {
+                                from: -sweep.width
+                                to: track.width
+                                duration: 1600
+                                easing.type: Easing.InOutQuad
+                            }
+                            PauseAnimation { duration: 250 }
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Waiting for a supervisor to resume this machine."
+                    color: theme.textSecondary
+                    font.pixelSize: 12
+                    font.family: "Segoe UI"
+                    wrapMode: Text.Wrap
+                }
+            }
+
             Text {
                 Layout.fillWidth: true
                 Layout.topMargin: 4
-                text: "This screen clears automatically. Contact a lab supervisor "
+                text: bridge.paused
+                    ? "Contact a lab supervisor if you believe this is an error."
+                    : "This screen clears automatically. Contact a lab supervisor "
                       + "if you believe this is an error."
                 color: theme.textMuted
                 font.pixelSize: 11

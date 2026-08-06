@@ -61,7 +61,7 @@ class ClientListModel(_DictListModel):
     """Connected and previously-seen Client Agents."""
 
     KEYS = ("client_id", "hostname", "address", "ip_address", "os_type",
-            "status", "last_seen", "connected")
+            "status", "last_seen", "connected", "paused", "pause_until")
 
 
 class ApplicationModel(_DictListModel):

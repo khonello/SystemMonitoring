@@ -243,6 +243,14 @@ present but empty. No real logic in this phase.
       1920x1080, 119 KB)
 
 ### Access control
+- [x] **Indeterminate pause** — hold one machine or the whole room with no
+      stated end. No countdown on the client, because there is no deadline to
+      show. Internally capped at 1 hour as a fail-safe against the *admin*
+      disappearing, with the Admin GUI warning at 5 minutes so extending is
+      deliberate. Pause beats a scheduled block; dropping it reverts to the
+      countdown rather than releasing a still-blocked machine.
+- [x] Script execution capped at 5 minutes (15 max), reported as
+      `status: "timeout"` so it reads differently from a crash
 - [x] Website filtering, both modes, hosts-file based inside delimited markers
       so an administrator's own entries survive. Blocks bare **and** `www.`
       forms — blocking one alone does not bite.

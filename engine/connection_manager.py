@@ -78,6 +78,28 @@ def set_status(peer_id: str, status: str) -> None:
         info["status"] = status
 
 
+def set_pause(peer_id: str, paused: bool, pause_until: str | None) -> None:
+    """Record a client's pause state, as reported in its heartbeat.
+
+    Live registry only, never the database: a pause is ephemeral, expires on
+    its own, and only matters for a client that is currently connected.
+    """
+    info = _peer_info.get(peer_id)
+    if info is not None:
+        info["paused"] = paused
+        info["pause_until"] = pause_until if paused else None
+
+
+def get_pause(peer_id: str) -> dict[str, Any]:
+    info = _peer_info.get(peer_id)
+    if info is None:
+        return {"paused": False, "pause_until": None}
+    return {
+        "paused": info.get("paused", False),
+        "pause_until": info.get("pause_until"),
+    }
+
+
 def get_peer_ids(role: str | None = None) -> list[str]:
     """List connected peer ids, optionally filtered by role."""
     if role is None:

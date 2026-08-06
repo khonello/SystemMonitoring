@@ -45,6 +45,10 @@ _INTEGRITY_KEY: bytes = os.environ.get(
 SCHEDULE_FILE = "lockout_schedule.json"
 POLICY_FILE = "policy_cache.json"
 
+# Persisted like the schedule so a reboot does not clear an admin's pause. It
+# expires on its own regardless, so a stale file cannot strand a machine.
+PAUSE_FILE = "pause_state.json"
+
 
 def state_path(name: str) -> Path:
     return STATE_DIR / name

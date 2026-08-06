@@ -78,6 +78,10 @@ Wire protocol is newline-delimited JSON over TCP, UTF-8. Every message has `type
 
 **Don't launch the overlay or dialog casually.** `client/overlay_app.py` takes over the full screen, disables Task Manager, and re-asserts topmost every 500ms. It always restores the Task Manager policy on exit — including on a crash — and closes itself at its `--until` time, but running it uninvited on someone's working machine is disruptive. Ask first.
 
+**Two different ways a screen gets held, and they are not interchangeable.** A *scheduled restriction* has a known end and shows the student a countdown; a *pause* is the admin holding the screen live, with no stated end and deliberately no countdown. Both are capped, but for different reasons — the schedule's 2-hour cap guards against the overlay hanging, the pause's 1-hour cap guards against the *admin* vanishing. Never show the pause's internal expiry on the client: that turns an admin safety net into a promise to the user. A pause takes precedence over a schedule, and dropping it reverts to the countdown rather than releasing a still-blocked machine.
+
+**Scripts are capped at 5 minutes (15 max).** They're an extension mechanism for small routine tasks, not a job runner. This does *not* remove the need for the non-blocking execution model — a 5-minute script stalls the agent just as surely as an infinite one. On Windows a killed script gets no cleanup, so scripts must be safely interruptible.
+
 **Lockout enforcement fails closed.** The schedule under `%ProgramData%` is HMAC-protected; if validation fails, treat the block as still active. Blocks are capped at 2 hours as a safety timeout against the overlay's own hangs (not against network loss — enforcement is local and doesn't need the Engine). Two independent watchdogs exist because the overlay *and* the agent can each hang: the agent polls every 30s, and an installer-registered Windows Scheduled Task checks every ~5 min. On boot the agent re-reads the schedule before anything else and re-launches the overlay if a block is still active.
 
 ## Build order

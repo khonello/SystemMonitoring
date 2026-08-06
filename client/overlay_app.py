@@ -43,6 +43,7 @@ from client.ui_host import (
     force_topmost,
     primary_screen_geometry,
 )
+from common.constants import OVERLAY_MODE_PAUSE, OVERLAY_MODE_SCHEDULED
 
 logger = logging.getLogger(__name__)
 
@@ -109,22 +110,41 @@ def set_task_manager_disabled(disabled: bool) -> None:
 
 
 class OverlayBridge(BaseBridge):
-    """State for Overlay.qml."""
+    """State for Overlay.qml.
+
+    `mode` decides what the student is told. A scheduled block shows a
+    countdown, because there is a known end to count to. A pause shows none —
+    it has no stated end, and displaying the internal one-hour fail-safe would
+    turn an admin safety net into a promise to the user.
+    """
 
     expired = Signal()
     geometryChanged = Signal()
     countdownChanged = Signal()
     progressChanged = Signal()
+    modeChanged = Signal()
 
     def __init__(self, until: datetime, message: str,
-                 geometry: tuple[int, int, int, int], show_windows: bool) -> None:
+                 geometry: tuple[int, int, int, int], show_windows: bool,
+                 mode: str = OVERLAY_MODE_SCHEDULED) -> None:
         super().__init__(message, show_windows)
         self._until = until
+        self._mode = mode
         self._started = datetime.now(timezone.utc)
         self._x, self._y, self._width, self._height = geometry
         self._countdown = "--:--:--"
         self._progress = 1.0
         self.refresh()
+
+    def _get_mode(self) -> str:
+        return self._mode
+
+    mode = Property(str, _get_mode, notify=modeChanged)
+
+    def _is_paused(self) -> bool:
+        return self._mode == OVERLAY_MODE_PAUSE
+
+    paused = Property(bool, _is_paused, notify=modeChanged)
 
     def _get_x(self) -> int:
         return self._x
@@ -180,6 +200,12 @@ class OverlayBridge(BaseBridge):
 # ---------------------------------------------------------------------------
 
 
+PAUSE_MESSAGE = (
+    "Your screen has been paused by a lab supervisor. Your work is untouched "
+    "and will still be here when the pause is lifted."
+)
+
+
 def _show(app, bridge: OverlayBridge, headless: bool) -> int:
     """Own the QML engine for exactly as long as the overlay is up.
 
@@ -222,11 +248,13 @@ def _show(app, bridge: OverlayBridge, headless: bool) -> int:
     return 0
 
 
-def run_overlay(until: datetime, message: str) -> int:
+def run_overlay(until: datetime, message: str, mode: str) -> int:
     headless = os.environ.get(HEADLESS_ENV) == "1"
 
     app = create_app("Lab Monitor Lockout")
-    bridge = OverlayBridge(until, message, primary_screen_geometry(app), not headless)
+    bridge = OverlayBridge(
+        until, message, primary_screen_geometry(app), not headless, mode
+    )
 
     return _show(app, bridge, headless)
 
@@ -234,7 +262,13 @@ def run_overlay(until: datetime, message: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lab lockout overlay")
     parser.add_argument("--until", required=True, help="ISO-8601 end time (UTC)")
-    parser.add_argument("--message", default=DEFAULT_MESSAGE)
+    parser.add_argument(
+        "--mode",
+        default=OVERLAY_MODE_SCHEDULED,
+        choices=[OVERLAY_MODE_SCHEDULED, OVERLAY_MODE_PAUSE],
+        help="scheduled shows a countdown; pause deliberately shows none",
+    )
+    parser.add_argument("--message", default=None)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level="INFO", format="%(asctime)s - %(levelname)s - %(message)s")
@@ -249,9 +283,13 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("End time has already passed; nothing to show")
         return 0
 
+    message = args.message or (
+        PAUSE_MESSAGE if args.mode == OVERLAY_MODE_PAUSE else DEFAULT_MESSAGE
+    )
+
     set_task_manager_disabled(True)
     try:
-        return run_overlay(until, args.message)
+        return run_overlay(until, message, args.mode)
     finally:
         # Always restore, including on a crash — leaving Task Manager disabled
         # after the block expired would be a lasting side effect.

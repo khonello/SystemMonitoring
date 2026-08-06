@@ -73,8 +73,59 @@ ApplicationWindow {
         }
     }
 
+    // A pause lapses on its own if nobody extends it. That is deliberate — it
+    // stops an unattended pause holding the lab indefinitely — but it must
+    // never happen silently, so it is announced here rather than in the status
+    // line where it could scroll past unnoticed.
+    Rectangle {
+        id: pauseBanner
+
+        property string clientId: ""
+        property int secondsLeft: 0
+
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: visible ? 44 : 0
+        visible: clientId !== ""
+        color: "#3a2d10"
+        z: 10
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                color: "#f0d58c"
+                elide: Text.ElideRight
+                text: "Pause on " + pauseBanner.clientId + " lapses in " +
+                      Math.ceil(pauseBanner.secondsLeft / 60) +
+                      " min. Extend it, or the machine resumes on its own."
+            }
+
+            Button {
+                text: "Extend"
+                onClicked: {
+                    backend.extendPause(pauseBanner.clientId)
+                    pauseBanner.clientId = ""
+                }
+            }
+
+            Button {
+                text: "Dismiss"
+                onClicked: pauseBanner.clientId = ""
+            }
+        }
+    }
+
     SplitView {
-        anchors.fill: parent
+        anchors.top: pauseBanner.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
         orientation: Qt.Horizontal
 
         ClientList {
@@ -153,6 +204,11 @@ ApplicationWindow {
         function onValidationFailed(message) {
             validationDialog.detail = message
             validationDialog.open()
+        }
+
+        function onPauseExpiring(clientId, secondsLeft) {
+            pauseBanner.clientId = clientId
+            pauseBanner.secondsLeft = secondsLeft
         }
     }
 }

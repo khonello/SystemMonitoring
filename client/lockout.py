@@ -30,7 +30,14 @@ from pathlib import Path
 from typing import Any
 
 from client.config import OVERLAY_EXE_PATH
-from client.state import SCHEDULE_FILE, StateTampered, read_state, write_state
+from client.state import PAUSE_FILE, SCHEDULE_FILE, StateTampered, read_state, write_state
+from common.constants import (
+    OVERLAY_MODE_PAUSE,
+    OVERLAY_MODE_SCHEDULED,
+    PAUSE_MAX_SECONDS,
+    STATUS_ERROR,
+    STATUS_SUCCESS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,7 @@ MAX_BLOCK_HOURS = 2
 WATCHDOG_INTERVAL = 30
 
 _overlay: subprocess.Popen[bytes] | None = None
+_overlay_mode: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +129,106 @@ def clear_schedule() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Indeterminate pause
+# ---------------------------------------------------------------------------
+#
+# Distinct from a scheduled restriction in intent and in presentation. A
+# schedule has a known end the student can see counting down; a pause has no
+# stated end and shows none — the admin holds it and drops it.
+#
+# The one-hour bound is a fail-safe against the admin, not a policy: if the
+# operator closes the GUI or the network dies mid-pause, the lab must not stay
+# frozen. The Admin GUI warns before it lapses so extending is deliberate.
+
+
+def store_pause(until: datetime) -> dict[str, Any]:
+    """Persist a pause, capping how long it can last unattended."""
+    capped = min(until, _now() + timedelta(seconds=PAUSE_MAX_SECONDS))
+    if capped < until:
+        logger.warning(
+            "Pause shortened from %s to %s by the %ds cap",
+            until.isoformat(), capped.isoformat(), PAUSE_MAX_SECONDS,
+        )
+
+    pause = {"until": capped.isoformat(), "set_at": _now().isoformat()}
+    write_state(PAUSE_FILE, pause)
+    return pause
+
+
+def load_pause() -> dict[str, Any] | None:
+    """Read the stored pause.
+
+    Fails closed like the schedule: a tampered file is treated as an active
+    pause rather than trusted, since the tamper itself is evidence of intent.
+    """
+    try:
+        return read_state(PAUSE_FILE)
+    except StateTampered as exc:
+        logger.error("Pause state tampered with (%s) - failing closed", exc)
+        return {
+            "until": (_now() + timedelta(seconds=PAUSE_MAX_SECONDS)).isoformat(),
+            "set_at": _now().isoformat(),
+            "tampered": True,
+        }
+
+
+def is_paused(pause: dict[str, Any] | None = None) -> bool:
+    pause = pause if pause is not None else load_pause()
+    if not pause:
+        return False
+
+    until = _parse(pause.get("until"))
+    if until is None:
+        logger.error("Pause state has an unreadable end time - failing closed")
+        return True
+
+    return _now() < until
+
+
+def clear_pause() -> None:
+    from client.state import clear_state
+
+    clear_state(PAUSE_FILE)
+
+
+def pause_expires_at() -> datetime | None:
+    """When the current pause lapses, or None if not paused."""
+    pause = load_pause()
+    return _parse(pause.get("until")) if pause and is_paused(pause) else None
+
+
+def apply_pause_command(payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply a SET_PAUSE command from the Engine."""
+    action = payload.get("action", "pause")
+
+    if action in {"resume", "clear", "release"}:
+        clear_pause()
+        enforce_once()
+        return {"status": STATUS_SUCCESS, "message": "Pause released"}
+
+    if action != "pause":
+        return {"status": STATUS_ERROR, "message": f"Unknown pause action: {action!r}"}
+
+    requested = payload.get("seconds")
+    try:
+        seconds = int(requested) if requested is not None else PAUSE_MAX_SECONDS
+    except (TypeError, ValueError):
+        seconds = PAUSE_MAX_SECONDS
+
+    seconds = max(1, min(seconds, PAUSE_MAX_SECONDS))
+    stored = store_pause(_now() + timedelta(seconds=seconds))
+    enforce_once()
+
+    return {
+        "status": STATUS_SUCCESS,
+        "message": "Screen paused",
+        # Reported so the Admin GUI knows when to warn, without having to
+        # assume the client honoured what it asked for.
+        "pause_until": stored["until"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Overlay process
 # ---------------------------------------------------------------------------
 
@@ -129,36 +237,50 @@ def overlay_running() -> bool:
     return _overlay is not None and _overlay.poll() is None
 
 
-def _overlay_command(end: datetime) -> list[str]:
+def _overlay_command(end: datetime, mode: str) -> list[str]:
     """argv for the overlay, preferring the bundled executable.
 
     Falls back to running the module with the current interpreter during
     development, before the Phase 4 packaging step has produced the exe.
     """
+    args = ["--until", end.isoformat(), "--mode", mode]
+
     if OVERLAY_EXE_PATH.exists():
-        return [str(OVERLAY_EXE_PATH), "--until", end.isoformat()]
+        return [str(OVERLAY_EXE_PATH), *args]
 
     logger.warning(
         "Overlay executable missing at %s - running the module directly",
         OVERLAY_EXE_PATH,
     )
-    return [sys.executable, "-m", "client.overlay_app", "--until", end.isoformat()]
+    return [sys.executable, "-m", "client.overlay_app", *args]
 
 
-def start_overlay(end: datetime) -> bool:
-    """Launch the lockout overlay if it is not already up."""
-    global _overlay
+def start_overlay(end: datetime, mode: str = OVERLAY_MODE_SCHEDULED) -> bool:
+    """Launch the overlay, or restart it if the mode has changed.
+
+    The mode matters to what the student sees: a scheduled block counts down,
+    a pause deliberately does not. Switching between them means replacing the
+    window rather than leaving a countdown running under a pause.
+    """
+    global _overlay, _overlay_mode
 
     if overlay_running():
-        return True
+        if _overlay_mode == mode:
+            return True
+        logger.info("Overlay mode changing from %s to %s; restarting", _overlay_mode, mode)
+        stop_overlay()
 
     try:
-        _overlay = subprocess.Popen(_overlay_command(end))
+        _overlay = subprocess.Popen(_overlay_command(end, mode))
+        _overlay_mode = mode
     except OSError:
-        logger.exception("Could not launch the lockout overlay")
+        logger.exception("Could not launch the overlay")
         return False
 
-    logger.warning("Lockout overlay started, blocking until %s", end.isoformat())
+    if mode == OVERLAY_MODE_PAUSE:
+        logger.warning("Screen paused (internal expiry %s)", end.isoformat())
+    else:
+        logger.warning("Lockout overlay started, blocking until %s", end.isoformat())
     return True
 
 
@@ -169,7 +291,9 @@ def stop_overlay() -> None:
     watchdog exists is that the overlay may be wedged, and a wedged process
     will not honour a polite request.
     """
-    global _overlay
+    global _overlay, _overlay_mode
+
+    _overlay_mode = None
 
     if _overlay is None:
         return
@@ -194,22 +318,33 @@ def stop_overlay() -> None:
 
 
 def enforce_once() -> None:
-    """Bring the overlay's state in line with the schedule.
+    """Bring the overlay in line with both the pause and the schedule.
 
     Deliberately a single synchronous pass with no memory of previous calls, so
     the same function serves the agent's watchdog loop, the startup check after
     a reboot, and the external Scheduled Task.
-    """
-    schedule = load_schedule()
 
+    A pause takes precedence over a scheduled block: it is the live admin
+    action, and it deliberately shows no countdown. Dropping the pause while a
+    scheduled window is still open falls back to the countdown rather than
+    releasing the machine.
+    """
+    pause = load_pause()
+    if is_paused(pause):
+        until = _parse(pause.get("until")) if pause else None
+        if until is not None:
+            start_overlay(until, OVERLAY_MODE_PAUSE)
+        return
+
+    schedule = load_schedule()
     if is_blocked_now(schedule):
         end = _parse(schedule.get("end")) if schedule else None
         if end is not None:
-            start_overlay(end)
+            start_overlay(end, OVERLAY_MODE_SCHEDULED)
         return
 
     if overlay_running():
-        logger.info("Block window has passed; releasing the machine")
+        logger.info("No active pause or block window; releasing the machine")
         stop_overlay()
 
 

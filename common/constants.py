@@ -87,6 +87,27 @@ MSG_SET_WEBSITE_POLICY: Final[str] = "SET_WEBSITE_POLICY"
 MSG_SET_APP_BLACKLIST: Final[str] = "SET_APP_BLACKLIST"
 MSG_SET_TIME_RESTRICTION: Final[str] = "SET_TIME_RESTRICTION"
 MSG_SHOW_DIALOG: Final[str] = "SHOW_DIALOG"
+MSG_SET_PAUSE: Final[str] = "SET_PAUSE"
+
+# An indeterminate pause: the admin holds the lab's screens with no stated end
+# time, and drops it when ready. To the student it is simply "paused" — no
+# countdown, because there is no deadline to show.
+#
+# Internally it IS bounded, at one hour. That cap is a fail-safe against the
+# admin rather than a policy shown to the user: if the operator closes the GUI,
+# goes home, or the network dies mid-pause, the machines must not stay frozen
+# indefinitely. As the cap approaches the Admin GUI warns so it can be extended
+# deliberately, which keeps a long pause an explicit choice rather than a
+# side effect of nobody noticing.
+PAUSE_MAX_SECONDS: Final[int] = 3600
+
+# How long before a pause lapses that the Admin GUI starts warning.
+PAUSE_WARN_SECONDS: Final[int] = 300
+
+# Overlay presentation modes. "scheduled" shows the countdown a time-based
+# restriction has; "pause" deliberately shows none.
+OVERLAY_MODE_SCHEDULED: Final[str] = "scheduled"
+OVERLAY_MODE_PAUSE: Final[str] = "pause"
 
 # ---------------------------------------------------------------------------
 # Message types — Admin to Engine, Engine to Admin
@@ -96,6 +117,11 @@ MSG_ADMIN_COMMAND: Final[str] = "ADMIN_COMMAND"
 MSG_CLIENT_LIST: Final[str] = "CLIENT_LIST"
 MSG_REPORT_REQUEST: Final[str] = "REPORT_REQUEST"
 MSG_REPORT: Final[str] = "REPORT"
+
+# Engine to Admin: a client's pause state changed. Pushed on change rather
+# than polled, so a pause set from another console — or one that lapsed on its
+# own — appears without waiting for a roster refresh.
+MSG_PAUSE_STATE: Final[str] = "PAUSE_STATE"
 
 # Report kinds an admin may request. Each maps to one engine.database query.
 REPORT_NETWORK_24H: Final[str] = "network_24h"
@@ -123,6 +149,7 @@ CLIENT_COMMANDS: Final[frozenset[str]] = frozenset({
     MSG_SET_APP_BLACKLIST,
     MSG_SET_TIME_RESTRICTION,
     MSG_SHOW_DIALOG,
+    MSG_SET_PAUSE,
 })
 
 # ---------------------------------------------------------------------------
@@ -150,6 +177,26 @@ POLICY_MODE_WHITELIST: Final[str] = "whitelist"
 SCRIPT_TYPE_PYTHON: Final[str] = "python"
 SCRIPT_TYPE_POWERSHELL: Final[str] = "powershell"
 
+# Predefined scripts are extensions for small routine tasks, not long-running
+# jobs, so execution is clamped. This bounds the damage a runaway script can do
+# across a lab: without it, one bad loop leaves a process on every machine.
+#
+# The ceiling exists so an admin cannot simply opt out. A script needing longer
+# than 15 minutes is doing something this mechanism was not meant for and
+# belongs in a scheduled task on the machine itself.
+#
+# Note this does NOT remove the need for the non-blocking execution model: even
+# a 5-minute script cannot be waited on inside the response cycle, so
+# COMMAND_ACCEPTED, output streaming and TERMINATE_SCRIPT all still apply.
+DEFAULT_SCRIPT_TIMEOUT: Final[int] = 300
+MAX_SCRIPT_TIMEOUT: Final[int] = 900
+
+# Grace period between asking a timed-out script to stop and forcing it.
+# Honest caveat: on Windows both terminate() and kill() are TerminateProcess,
+# so the child gets no chance to clean up either way. Scripts should be written
+# to be safely interruptible — a run killed mid-write leaves a partial file.
+SCRIPT_KILL_GRACE: Final[float] = 5.0
+
 VALID_SCRIPT_TYPES: Final[frozenset[str]] = frozenset({
     SCRIPT_TYPE_PYTHON,
     SCRIPT_TYPE_POWERSHELL,
@@ -157,3 +204,8 @@ VALID_SCRIPT_TYPES: Final[frozenset[str]] = frozenset({
 
 STATUS_SUCCESS: Final[str] = "success"
 STATUS_ERROR: Final[str] = "error"
+
+# A script stopped at the cap is reported distinctly rather than as a generic
+# error, so the operator can tell "your script is too slow" from "your script
+# crashed" without reading the output.
+STATUS_TIMEOUT: Final[str] = "timeout"

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from admin_gui.config import ADMIN_ID, MAX_LIVE_SAMPLES
 from admin_gui.connection import EngineConnection
@@ -29,19 +30,26 @@ from admin_gui.models import (
 )
 from admin_gui.validation import validate_script
 from common.constants import (
+    DEFAULT_SCRIPT_TIMEOUT,
+    MAX_SCRIPT_TIMEOUT,
     MSG_APP_DATA,
     MSG_CLIENT_LIST,
     MSG_COMMAND_ACCEPTED,
     MSG_COMMAND_COMPLETE,
     MSG_COMMAND_OUTPUT,
     MSG_COMMAND_RESPONSE,
+    MSG_EXECUTE_SCRIPT,
     MSG_NETWORK_DATA,
+    MSG_PAUSE_STATE,
     MSG_REPORT,
     MSG_SCREEN_CAPTURE,
+    MSG_SET_PAUSE,
     MSG_SET_WEBSITE_POLICY,
     MSG_TERMINATE_PROCESS,
     MSG_TERMINATE_SCRIPT,
     MSG_USB_EVENT,
+    PAUSE_MAX_SECONDS,
+    PAUSE_WARN_SECONDS,
     REPORT_APP_USAGE,
     REPORT_COMMAND_HISTORY,
     REPORT_NETWORK_24H,
@@ -64,6 +72,7 @@ class Backend(QObject):
     commandFinished = Signal(str, str, str)   # command_id, status, message
     validationFailed = Signal(str)
     reportReady = Signal(str)                 # report kind
+    pauseExpiring = Signal(str, int)          # client_id, seconds remaining
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -91,8 +100,19 @@ class Backend(QObject):
         self._live_usb: dict[str, list[dict[str, Any]]] = {}
         self._live_network: dict[str, list[dict[str, Any]]] = {}
 
+        # client_id -> when its pause lapses, learned from heartbeat-reported
+        # state rather than from what this GUI asked for.
+        self._pause_until: dict[str, datetime] = {}
+        self._warned: set[str] = set()
+
+        self._pause_timer = QTimer(self)
+        self._pause_timer.setInterval(10_000)
+        self._pause_timer.timeout.connect(self._check_pause_expiry)
+        self._pause_timer.start()
+
         self._handlers = {
             MSG_CLIENT_LIST: self._handle_client_list,
+            MSG_PAUSE_STATE: self._handle_pause_state,
             MSG_APP_DATA: self._handle_app_data,
             MSG_NETWORK_DATA: self._handle_network_data,
             MSG_USB_EVENT: self._handle_usb_event,
@@ -178,11 +198,13 @@ class Backend(QObject):
 
     # -- command slots -----------------------------------------------------
 
-    @Slot(str, str)
-    def sendScript(self, script: str, script_type: str) -> None:
-        asyncio.ensure_future(self._send_script(script, script_type))
+    @Slot(str, str, int)
+    def sendScript(self, script: str, script_type: str, timeout: int) -> None:
+        asyncio.ensure_future(self._send_script(script, script_type, timeout))
 
-    async def _send_script(self, script: str, script_type: str) -> None:
+    async def _send_script(
+        self, script: str, script_type: str, timeout: int = DEFAULT_SCRIPT_TIMEOUT
+    ) -> None:
         """Validate locally, then dispatch. Never send a script that will not
         compile — that is the entire reason this GUI ships an interpreter."""
         ok, message = await validate_script(script, script_type)
@@ -196,14 +218,22 @@ class Backend(QObject):
             self._set_status("Select a client first")
             return
 
-        from common.constants import MSG_EXECUTE_SCRIPT
+        # Clamped here too, so the operator sees the effective value in the
+        # status line rather than discovering it from the client's reply.
+        effective = max(1, min(int(timeout or DEFAULT_SCRIPT_TIMEOUT), MAX_SCRIPT_TIMEOUT))
 
         await self._connection.send_command(
             MSG_EXECUTE_SCRIPT,
             [self._selected_client],
-            {"script": script, "script_type": script_type},
+            {
+                "script": script,
+                "script_type": script_type,
+                "timeout_seconds": effective,
+            },
         )
-        self._set_status(f"Script sent to {self._selected_client}")
+        self._set_status(
+            f"Script sent to {self._selected_client} (limit {effective}s)"
+        )
 
     @Slot(str, bool)
     def terminateProcess(self, process_name: str, force: bool) -> None:
@@ -228,6 +258,97 @@ class Backend(QObject):
                 {"target_command_id": target_command_id, "force": force},
             )
         )
+
+    # -- pause -------------------------------------------------------------
+
+    @Slot()
+    def pauseSelected(self) -> None:
+        """Pause the selected client's screen, indefinitely from its point of
+        view."""
+        if not self._require_selection():
+            return
+        self._send_pause([self._selected_client], "pause")
+
+    @Slot()
+    def pauseAll(self) -> None:
+        """Pause every connected client — the 'hold the room' case."""
+        targets = [row["client_id"] for row in self.clients.rows if row.get("connected")]
+        if not targets:
+            self._set_status("No connected clients to pause")
+            return
+        self._send_pause(targets, "pause")
+
+    @Slot()
+    def resumeSelected(self) -> None:
+        if not self._require_selection():
+            return
+        self._send_pause([self._selected_client], "resume")
+
+    @Slot()
+    def resumeAll(self) -> None:
+        targets = [row["client_id"] for row in self.clients.rows if row.get("connected")]
+        if not targets:
+            self._set_status("No connected clients to resume")
+            return
+        self._send_pause(targets, "resume")
+
+    @Slot(str)
+    def extendPause(self, client_id: str) -> None:
+        """Push a paused client's internal expiry back out to the full cap.
+
+        Extending is deliberately an explicit act. The cap exists so an
+        unattended pause lapses; renewing it silently would defeat that.
+        """
+        target = client_id or self._selected_client
+        if not target:
+            self._set_status("Select a client first")
+            return
+        self._send_pause([target], "pause")
+        self._warned.discard(target)
+
+    def _send_pause(self, targets: list[str], action: str) -> None:
+        asyncio.ensure_future(
+            self._connection.send_command(
+                MSG_SET_PAUSE, targets, {"action": action, "seconds": PAUSE_MAX_SECONDS}
+            )
+        )
+        verb = "Pausing" if action == "pause" else "Resuming"
+        self._set_status(f"{verb} {len(targets)} client(s)")
+
+    def _check_pause_expiry(self) -> None:
+        """Warn before a pause lapses, once per client per pause.
+
+        Driven off what the clients actually report rather than what this GUI
+        asked for, so a pause set from another console is tracked too, and a
+        restarted GUI recovers the state instead of losing it.
+        """
+        now = datetime.now(timezone.utc)
+
+        for client_id, until in list(self._pause_until.items()):
+            remaining = (until - now).total_seconds()
+
+            if remaining <= 0:
+                self._pause_until.pop(client_id, None)
+                self._warned.discard(client_id)
+                continue
+
+            if remaining <= PAUSE_WARN_SECONDS and client_id not in self._warned:
+                self._warned.add(client_id)
+                self.pauseExpiring.emit(client_id, int(remaining))
+                self._set_status(
+                    f"{client_id}: pause lapses in {int(remaining // 60)} min - "
+                    f"extend it or it will resume on its own"
+                )
+
+    def _record_pause(self, client_id: str, paused: bool, until: str | None) -> None:
+        if not paused or not until:
+            self._pause_until.pop(client_id, None)
+            self._warned.discard(client_id)
+            return
+
+        parsed = _parse_iso(until)
+        if parsed is not None:
+            self._pause_until[client_id] = parsed
 
     @Slot(int)
     def captureScreen(self, quality: int) -> None:
@@ -273,9 +394,27 @@ class Backend(QObject):
         self._set_connected(False)
         self._set_status(reason)
 
+    def _handle_pause_state(self, message: dict[str, Any]) -> None:
+        payload = get_payload(message)
+        client_id = message.get("client_id", "")
+        paused = bool(payload.get("paused"))
+
+        self._record_pause(client_id, paused, payload.get("pause_until"))
+        self._set_status(f"{client_id}: {'paused' if paused else 'resumed'}")
+
+        # Keep the roster's badge honest without waiting for a manual refresh.
+        asyncio.ensure_future(self._connection.request_client_list())
+
     def _handle_client_list(self, message: dict[str, Any]) -> None:
         clients = get_payload(message).get("clients", [])
         self.clients.setRows(clients)
+
+        for row in clients:
+            self._record_pause(
+                row.get("client_id", ""),
+                bool(row.get("paused")),
+                row.get("pause_until"),
+            )
 
         # Drop a selection whose machine is gone from the roster entirely.
         known = {entry.get("client_id") for entry in clients}
@@ -380,6 +519,15 @@ class Backend(QObject):
         if state != self._connected:
             self._connected = state
             self.connectionStateChanged.emit(state)
+
+
+def _parse_iso(value: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp, tolerating the trailing Z form."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _format_bytes(value: Any) -> str:

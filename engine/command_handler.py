@@ -28,6 +28,7 @@ from common.constants import (
     MSG_COMMAND_RESPONSE,
     MSG_HEARTBEAT,
     MSG_NETWORK_DATA,
+    MSG_PAUSE_STATE,
     MSG_REPORT,
     MSG_REPORT_REQUEST,
     MSG_USB_EVENT,
@@ -60,6 +61,25 @@ async def handle_heartbeat(peer_id: str, payload: dict[str, Any]) -> None:
     connection_manager.set_status(peer_id, status)
     logger.debug("Heartbeat from %s (idle=%ss)", peer_id, payload.get("idle_time"))
     database.update_client_last_seen(peer_id, status)
+
+    # Pause state is kept in the live registry rather than the database: it is
+    # ephemeral, self-expiring, and only ever interesting for clients that are
+    # currently connected.
+    was_paused = connection_manager.get_pause(peer_id).get("paused", False)
+    now_paused = bool(payload.get("paused"))
+
+    connection_manager.set_pause(
+        peer_id, now_paused, payload.get("pause_until")
+    )
+
+    # Tell admins the moment it changes, so a pause set from another console —
+    # or one that lapsed on its own — shows up without waiting for a refresh.
+    if was_paused != now_paused:
+        await _relay_to_admins(
+            MSG_PAUSE_STATE,
+            peer_id,
+            {"paused": now_paused, "pause_until": payload.get("pause_until")},
+        )
 
 
 async def handle_app_data(peer_id: str, payload: dict[str, Any]) -> None:

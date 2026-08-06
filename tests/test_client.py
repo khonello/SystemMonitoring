@@ -22,6 +22,11 @@ from client.monitors.network_monitor import collect_network_data
 from client.monitors.process_monitor import collect_process_data
 from client.monitors.usb_monitor import get_idle_time, poll_usb_events, reset_baseline
 from common.constants import (
+    DEFAULT_SCRIPT_TIMEOUT,
+    MAX_SCRIPT_TIMEOUT,
+    OVERLAY_MODE_PAUSE,
+    OVERLAY_MODE_SCHEDULED,
+    PAUSE_MAX_SECONDS,
     POLICY_MODE_BLACKLIST,
     POLICY_MODE_WHITELIST,
     RECONNECT_DELAY,
@@ -258,6 +263,149 @@ def test_apply_command_can_clear(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Indeterminate pause
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def quiet_overlay(monkeypatch):
+    """Record overlay calls without launching a window."""
+    calls = []
+    monkeypatch.setattr(
+        lockout, "start_overlay",
+        lambda end, mode=OVERLAY_MODE_SCHEDULED: calls.append(("start", mode)) or True,
+    )
+    monkeypatch.setattr(lockout, "stop_overlay", lambda: calls.append(("stop", None)))
+    monkeypatch.setattr(lockout, "overlay_running", lambda: False)
+    return calls
+
+
+def test_pause_is_capped_at_one_hour():
+    """The cap is a fail-safe against an absent admin, not a user-facing
+    policy — an unattended pause must lapse."""
+    stored = lockout.store_pause(datetime.now(timezone.utc) + timedelta(hours=8))
+
+    remaining = lockout._parse(stored["until"]) - datetime.now(timezone.utc)
+    assert remaining <= timedelta(seconds=PAUSE_MAX_SECONDS + 1)
+
+
+def test_pause_reports_active():
+    lockout.store_pause(datetime.now(timezone.utc) + timedelta(minutes=10))
+
+    assert lockout.is_paused() is True
+
+
+def test_lapsed_pause_reports_inactive():
+    lockout.store_pause(datetime.now(timezone.utc) - timedelta(minutes=1))
+
+    assert lockout.is_paused() is False
+
+
+def test_no_pause_reports_inactive():
+    assert lockout.is_paused() is False
+
+
+def test_tampered_pause_fails_closed():
+    lockout.store_pause(datetime.now(timezone.utc) + timedelta(minutes=10))
+
+    path = state.state_path(state.PAUSE_FILE)
+    path.write_text(path.read_text(encoding="utf-8").replace("2026", "2020"),
+                    encoding="utf-8")
+
+    pause = lockout.load_pause()
+
+    assert pause["tampered"] is True
+    assert lockout.is_paused(pause) is True
+
+
+def test_pause_command_sets_and_reports_expiry(quiet_overlay):
+    result = lockout.apply_pause_command({"action": "pause"})
+
+    assert result["status"] == "success"
+    assert lockout.is_paused() is True
+    assert lockout._parse(result["pause_until"]) is not None
+
+
+def test_pause_command_clamps_a_long_request(quiet_overlay):
+    result = lockout.apply_pause_command({"action": "pause", "seconds": 99_999})
+
+    remaining = lockout._parse(result["pause_until"]) - datetime.now(timezone.utc)
+    assert remaining <= timedelta(seconds=PAUSE_MAX_SECONDS + 1)
+
+
+def test_resume_clears_the_pause(quiet_overlay):
+    lockout.apply_pause_command({"action": "pause"})
+
+    result = lockout.apply_pause_command({"action": "resume"})
+
+    assert result["status"] == "success"
+    assert lockout.is_paused() is False
+
+
+def test_unknown_pause_action_is_rejected(quiet_overlay):
+    assert lockout.apply_pause_command({"action": "freeze"})["status"] == "error"
+
+
+def test_pause_takes_precedence_over_a_schedule(quiet_overlay):
+    """Both can be active. The pause is the live admin action and shows no
+    countdown, so it wins."""
+    lockout.store_schedule(*_window(-0.5, 0.5))
+    lockout.store_pause(datetime.now(timezone.utc) + timedelta(minutes=10))
+
+    lockout.enforce_once()
+
+    assert ("start", OVERLAY_MODE_PAUSE) in quiet_overlay
+
+
+def test_dropping_a_pause_falls_back_to_an_active_schedule(quiet_overlay):
+    """Resuming must not release a machine that is still inside a scheduled
+    block — it should revert to the countdown."""
+    lockout.store_schedule(*_window(-0.5, 0.5))
+    lockout.store_pause(datetime.now(timezone.utc) + timedelta(minutes=10))
+    lockout.enforce_once()
+
+    lockout.clear_pause()
+    quiet_overlay.clear()
+    lockout.enforce_once()
+
+    assert ("start", OVERLAY_MODE_SCHEDULED) in quiet_overlay
+
+
+def test_dropping_a_pause_with_no_schedule_releases_the_machine(monkeypatch):
+    calls = []
+    monkeypatch.setattr(lockout, "start_overlay", lambda *a, **k: True)
+    monkeypatch.setattr(lockout, "stop_overlay", lambda: calls.append("stop"))
+    monkeypatch.setattr(lockout, "overlay_running", lambda: True)
+
+    lockout.clear_pause()
+    lockout.enforce_once()
+
+    assert calls == ["stop"]
+
+
+def test_pause_expiry_is_exposed_for_the_admin_warning():
+    lockout.store_pause(datetime.now(timezone.utc) + timedelta(minutes=10))
+
+    assert lockout.pause_expires_at() is not None
+
+
+def test_pause_expiry_is_none_when_not_paused():
+    assert lockout.pause_expires_at() is None
+
+
+@pytest.mark.asyncio
+async def test_pause_command_dispatches(captured_messages, quiet_overlay):
+    await handle_command({
+        "type": "SET_PAUSE",
+        "command_id": "cmd_pause",
+        "payload": {"action": "pause"},
+    })
+
+    assert captured_messages[0]["payload"]["status"] == "success"
+    assert lockout.is_paused() is True
+
+
+# ---------------------------------------------------------------------------
 # Website policy
 # ---------------------------------------------------------------------------
 
@@ -480,6 +628,94 @@ async def test_terminating_an_unknown_script_reports_cleanly():
     result = await terminate_script("cmd_never_existed")
 
     assert result["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Execution time cap
+# ---------------------------------------------------------------------------
+
+
+def test_timeout_defaults_when_unspecified():
+    from client.executor import clamp_timeout
+
+    assert clamp_timeout(None) == DEFAULT_SCRIPT_TIMEOUT
+    assert clamp_timeout("") == DEFAULT_SCRIPT_TIMEOUT
+    assert clamp_timeout("nonsense") == DEFAULT_SCRIPT_TIMEOUT
+    assert clamp_timeout(0) == DEFAULT_SCRIPT_TIMEOUT
+    assert clamp_timeout(-5) == DEFAULT_SCRIPT_TIMEOUT
+
+
+def test_timeout_is_clamped_to_the_ceiling():
+    """An admin must not be able to opt out of the cap."""
+    from client.executor import clamp_timeout
+
+    assert clamp_timeout(MAX_SCRIPT_TIMEOUT * 10) == MAX_SCRIPT_TIMEOUT
+
+
+def test_reasonable_timeout_is_honoured():
+    from client.executor import clamp_timeout
+
+    assert clamp_timeout(60) == 60
+    assert clamp_timeout("120") == 120
+
+
+@pytest.mark.asyncio
+async def test_overrunning_script_is_stopped_and_reported_as_timeout(
+    captured_messages, tmp_path, monkeypatch
+):
+    """A script that outlives its limit is killed, and reported distinctly from
+    a crash so the operator can tell the two apart."""
+    monkeypatch.setattr("client.executor.SCRIPT_LOG_DIR", tmp_path)
+    monkeypatch.setattr("client.executor.TAIL_POLL_INTERVAL", 0.05)
+    monkeypatch.setattr("client.executor.SCRIPT_KILL_GRACE", 2.0)
+
+    script = "import time\nprint('working', flush=True)\ntime.sleep(60)\n"
+
+    await handle_command({
+        "type": "EXECUTE_SCRIPT",
+        "command_id": "cmd_slow",
+        "payload": {"script": script, "script_type": "python", "timeout_seconds": 1},
+    })
+
+    accepted = [m for m in captured_messages if m["type"] == "COMMAND_ACCEPTED"]
+    assert accepted, "launch must still be acknowledged immediately"
+    assert accepted[0]["payload"]["timeout_seconds"] == 1
+
+    for _ in range(200):
+        if any(m["type"] == "COMMAND_COMPLETE" for m in captured_messages):
+            break
+        await asyncio.sleep(0.05)
+
+    complete = [m for m in captured_messages if m["type"] == "COMMAND_COMPLETE"]
+    assert len(complete) == 1
+    assert complete[0]["payload"]["status"] == "timeout"
+    assert "execution limit" in complete[0]["payload"]["message"]
+    assert "cmd_slow" not in running_scripts
+    assert list(tmp_path.glob("cmd_slow.*")) == [], "scratch files still cleared"
+
+
+@pytest.mark.asyncio
+async def test_quick_script_is_unaffected_by_the_cap(
+    captured_messages, tmp_path, monkeypatch
+):
+    """The cap must not interfere with the normal case."""
+    monkeypatch.setattr("client.executor.SCRIPT_LOG_DIR", tmp_path)
+    monkeypatch.setattr("client.executor.TAIL_POLL_INTERVAL", 0.05)
+
+    await handle_command({
+        "type": "EXECUTE_SCRIPT",
+        "command_id": "cmd_quick",
+        "payload": {"script": "print('fast')\n", "script_type": "python",
+                    "timeout_seconds": 60},
+    })
+
+    for _ in range(200):
+        if any(m["type"] == "COMMAND_COMPLETE" for m in captured_messages):
+            break
+        await asyncio.sleep(0.05)
+
+    complete = [m for m in captured_messages if m["type"] == "COMMAND_COMPLETE"]
+    assert complete[0]["payload"]["status"] == "success"
 
 
 # ---------------------------------------------------------------------------

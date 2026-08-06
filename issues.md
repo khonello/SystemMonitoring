@@ -10,9 +10,13 @@ after its phase is finished, or if it blocks a phase from starting.
 **[Section A](#a--needs-your-decision) needs your decision** — those cannot be
 resolved by writing code. Sections B and C are engineering work.
 
-Phases 0–4 are complete apart from packaging, which is blocked on A5. Resolved
-items stay in section B rather than being deleted, so the reasoning behind each
-decision survives.
+Phases 0–4 are complete apart from packaging. Resolved items stay in section B
+rather than being deleted, so the reasoning behind each decision survives.
+
+**Currently blocking:** nothing, strictly. A5 has been answered in substance;
+one detail remains (are your scripts stdlib-only?) and closing it unblocks
+packaging via C2. Everything else in section A is policy you can settle at any
+point before deployment.
 
 ---
 
@@ -72,15 +76,23 @@ that is in scope depends on how you intend to present and deploy the project.
 Default if you do nothing: it stays out of scope, and the limitation is
 documented rather than fixed.
 
-### A5. What do your predefined scripts actually need to do?
+### A5. What do your predefined scripts need? — **ANSWERED, one detail left**
 
-This decides the bundled Python distribution (see C2), and it cannot be
-answered from the code. If your scripts only need the standard library, the
-small embeddable distribution works. If any of them needs a third-party
-package, the Client Agent and Admin GUI both need a fuller frozen interpreter
-instead, which is a materially larger packaging step in Phase 4.
+Answered: scripts are an *extension mechanism* for small routine tasks not
+built into the client's features by default. That settles the shape of the
+problem and produced the execution cap (see B9).
 
-A list of the scripts you actually intend to ship would settle it.
+**The remaining detail**: "small routine tasks" is consistent with
+standard-library-only, which would make the small embeddable distribution
+viable. But it is not proof — a routine task might still reach for `requests`
+to call an internal API, or `psutil` for something the agent does not already
+report.
+
+If you can confirm your scripts are stdlib + `subprocess` + PowerShell only,
+C2 closes and packaging can proceed on the embeddable distribution. If even one
+needs a third-party package, the script-execution runtime needs a fuller frozen
+interpreter instead. Either way this is now a small question, not an open-ended
+one — and it is reversible, since only the script runtime is affected.
 
 ### A6. Admins authenticate as if they were clients — is that what you want?
 
@@ -180,6 +192,57 @@ Phase 4 monitors.
 
 The Deployment section now says `pip install PySide6 qasync` and uses
 `python -m admin_gui.main`.
+
+### B9. Scripts could run forever — **DONE**
+
+The README's Script Execution Model was built around "some scripts run
+indefinitely". A5's answer makes that premise wrong rather than the design
+wrong: predefined scripts are extensions for small routine tasks, so an
+unbounded run is a bug, not a use case.
+
+Execution is now capped at **5 minutes by default, 15 maximum**. The ceiling
+matters as much as the default — an admin who could set it to infinity would
+have no cap at all. A script stopped at the limit reports `status: "timeout"`,
+distinct from `"error"`, so an operator can tell "too slow" from "crashed"
+without reading the output.
+
+Two things worth keeping in mind:
+
+- **The non-blocking model still stands.** A 5-minute script would stall the
+  agent just as surely as an infinite one, so `COMMAND_ACCEPTED`, output
+  streaming and `TERMINATE_SCRIPT` are all still needed. The cap is an
+  addition, not a simplification — nothing built for the old premise was wasted.
+- **A killed script gets no cleanup.** On Windows both `terminate()` and
+  `kill()` map to `TerminateProcess`, so a run stopped at the limit cannot
+  tidy up after itself; one killed mid-write leaves a partial file. Scripts
+  under this mechanism must be safely interruptible. Documented in the README
+  rather than left to be discovered.
+
+### B10. Indeterminate pause — **DONE** (new feature)
+
+An admin can hold one machine's screen or the whole room's, with no stated end
+time, and drop it when ready. To the student it is simply "paused" — no
+countdown, because there is no deadline to show.
+
+The one-hour internal bound is a fail-safe against **the admin**, not the user:
+if the operator closes the GUI or the network dies mid-pause, the lab must not
+stay frozen. It is deliberately never displayed on the client, since showing it
+would turn a safety net into a promise. The Admin GUI warns at five minutes
+remaining, with an Extend button, so a long hold stays an explicit choice.
+
+Design points that were not obvious going in:
+
+- **Pause and a scheduled block can both be active.** The pause wins, being the
+  live action; dropping it while a scheduled window is still open reverts to
+  the countdown rather than releasing the machine. Covered by tests both ways.
+- **The overlay is restarted, not reconfigured, when the mode changes** — a
+  pause must not leave a scheduled countdown running underneath it.
+- **The Admin GUI tracks expiry from what clients report in their heartbeats**,
+  not from what it asked for. So a pause set from another console is tracked
+  too, and a restarted GUI recovers the state instead of losing it.
+- Pause state is tamper-protected and **fails closed** like the lockout
+  schedule, and persists across a reboot — but expires on its own regardless,
+  so a stale file cannot strand a machine.
 
 ### B8. A registration error left the socket open — **DONE** (found during this work)
 

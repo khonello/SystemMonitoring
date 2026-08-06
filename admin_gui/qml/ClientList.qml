@@ -29,6 +29,30 @@ Item {
             }
         }
 
+        // Pausing the whole room is the common case, so it gets its own row
+        // rather than being buried in the per-client command panel.
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            Layout.bottomMargin: 6
+            spacing: 6
+
+            Button {
+                text: "Pause all"
+                enabled: backend.connected
+                Layout.fillWidth: true
+                onClicked: backend.pauseAll()
+            }
+
+            Button {
+                text: "Resume all"
+                enabled: backend.connected
+                Layout.fillWidth: true
+                onClicked: backend.resumeAll()
+            }
+        }
+
         ListView {
             id: listView
 
@@ -56,11 +80,34 @@ Item {
                         spacing: 2
                         Layout.fillWidth: true
 
-                        Label {
-                            text: model.client_id || ""
-                            font.bold: true
-                            elide: Text.ElideRight
+                        RowLayout {
                             Layout.fillWidth: true
+                            spacing: 6
+
+                            Label {
+                                text: model.client_id || ""
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+
+                            Rectangle {
+                                visible: model.paused === true
+                                radius: 3
+                                color: "#3a2d10"
+                                border.width: 1
+                                border.color: "#d29922"
+                                implicitWidth: pausedTag.implicitWidth + 10
+                                implicitHeight: pausedTag.implicitHeight + 4
+
+                                Label {
+                                    id: pausedTag
+                                    anchors.centerIn: parent
+                                    text: "paused"
+                                    color: "#d29922"
+                                    font.pixelSize: 9
+                                }
+                            }
                         }
 
                         Label {

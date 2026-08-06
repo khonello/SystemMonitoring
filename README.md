@@ -111,6 +111,20 @@ A socket-based client-server application that enables real-time monitoring and m
   - **Whitelist mode (opt-in, for locked-down sessions)**: only listed domains resolve/load; everything else is blocked. Intended for scenarios like exam sessions where reaching only a specific site (e.g. an exam portal) is the explicit goal.
   - **Known tradeoff of whitelist mode**: most real sites load assets from third-party domains — CDNs, font providers, analytics, embedded video, SSO — that aren't obvious from the site's own domain. Unless those dependency domains are also whitelisted, pages will partially or fully break. This is expected and accepted when whitelist mode is deliberately chosen for a locked-down session; it is not a suitable default for general browsing, which is why blacklist remains the default mode.
 
+- **Indeterminate Pause**: Hold one machine's screen — or the whole room's — with no stated end time, and drop it when ready. Distinct from a time-based restriction in both intent and presentation:
+
+  | | Time-based restriction | Pause |
+  |---|---|---|
+  | Set by | A schedule, in advance | The admin, live |
+  | User sees | A countdown to a known end | "Paused", no countdown |
+  | Ends when | The window closes | The admin drops it |
+  | Bounded by | 2-hour cap per block | 1-hour cap |
+  | Cap protects against | The overlay hanging | **The admin disappearing** |
+
+  The one-hour bound is a fail-safe, not a policy, and is deliberately never shown to the student — displaying it would turn an admin safety net into a promise. If the operator closes the GUI, goes home, or the network drops mid-pause, the machines must not stay frozen. As the bound approaches, the **Admin GUI warns** so the pause can be extended deliberately; that keeps a long hold an explicit choice rather than something nobody noticed.
+
+  A pause and a scheduled block can be active at once. The pause takes precedence, since it is the live action; dropping it while a scheduled window is still open reverts to the countdown rather than releasing the machine.
+
 - **Time-Based Restrictions**: Control lab access hours, enforced via a bundled, single-monitor **overlay executable** (see "Time-Based Restriction Enforcement" below for full design: fullscreen overlay, tamper-resistant local schedule storage, 2-hour continuous-block cap, independent watchdog, and reboot handling).
   - Define allowed usage time windows
   - Per-client or group-based schedules
@@ -457,6 +471,19 @@ Ordinary app preferences — last-connected Engine address, window layout, a cac
   }
 }
 
+// Pause a client's screen indefinitely, or drop the pause.
+// "seconds" is the internal fail-safe bound, clamped to 3600 by the client.
+// It is never displayed to the user — see "Indeterminate Pause" above.
+{
+  "type": "SET_PAUSE",
+  "command_id": "cmd_12350",
+  "timestamp": "2026-01-16T10:30:00Z",
+  "payload": {
+    "action": "pause",        // "pause" | "resume"
+    "seconds": 3600
+  }
+}
+
 // Set website filtering policy for a client/session — "mode" is required
 // and makes explicit which model is active, per the blacklist-default /
 // whitelist-for-locked-down-sessions decision (see Access Control above).
@@ -524,13 +551,20 @@ Predefined scripts are restricted to two types: **Python** and **PowerShell**. P
 
 ### Script Execution Model
 
-Some admin-defined scripts return quickly; others run indefinitely. Blocking on full completion before responding (as a naive `subprocess.communicate()` approach would) doesn't work for the latter case. Instead:
+**Scope of predefined scripts**: they are an *extension mechanism* for small routine tasks that aren't built into the client's features by default — clearing temp files, restarting a service, checking disk space. They are explicitly **not** a way to run long-lived jobs.
+
+That intent is enforced rather than assumed. Execution is capped at **5 minutes by default, 15 minutes maximum**; a script that overruns is stopped. Without a cap, one bad loop leaves a stuck process on every machine in the lab, and nothing about the design would notice.
+
+Scripts still cannot be waited on inside the response cycle, so the non-blocking model below is unchanged — a 5-minute script would stall the agent just as surely as an infinite one. Blocking on full completion (as a naive `subprocess.communicate()` approach would) is wrong at any duration:
 
 1. The client launches the script **detached** from the response cycle — stdout/stderr are redirected to a unique per-execution log file (e.g. `logs/{command_id}.log`), keyed by `command_id` so concurrent or repeated runs of the same script never collide.
 2. The client immediately acknowledges the launch (does not wait for completion) so the admin sees the command was accepted.
 3. A background task polls the log file **on a fixed interval** and only reads/sends when the file **size has grown** since the last check — this avoids reopening and re-reading the file on every tick when the script has produced no new output. New bytes are streamed back to the server as `COMMAND_OUTPUT` chunks.
 4. Once the process exits, the client sends a single `COMMAND_COMPLETE` and then **deletes the log file** (and the temporary script source file) — it's per-execution scratch space, not a durable record, so nothing is left behind once output has been reported.
-5. Because some scripts never terminate, the admin can send a termination request **keyed by `command_id`**, not just by process name, so a specific long-running script can be stopped without guessing which process it maps to.
+5. The admin can also stop a script early, **keyed by `command_id`** rather than process name, so one specific execution can be stopped without guessing which process it maps to — several runs may share an interpreter name.
+6. A script stopped at the cap reports `status: "timeout"`, distinct from `"error"`, so an operator can tell "too slow" from "crashed" without reading the output.
+
+**Known limitation of the cap**: on Windows both `terminate()` and `kill()` map to `TerminateProcess`, so a script stopped at the limit gets no opportunity to clean up. A run killed halfway through writing a file leaves a partial file. Scripts under this mechanism should therefore be written to be safely interruptible — which is a reasonable ask given they are meant to be small routine tasks.
 
 **Server → Client (Commands)**:
 ```json
@@ -541,12 +575,13 @@ Some admin-defined scripts return quickly; others run indefinitely. Blocking on 
   "timestamp": "2026-01-16T10:30:00Z",
   "payload": {
     "script": "print('System check')",
-    "script_type": "python"   // "python" | "powershell"
+    "script_type": "python",     // "python" | "powershell"
+    "timeout_seconds": 300       // optional; default 300, clamped to 900
   }
 }
 
-// Terminate a running script by command_id (not process name —
-// some scripts run indefinitely and must be stoppable individually)
+// Terminate a running script by command_id (not process name — several runs
+// may share an interpreter name, so only command_id names one execution)
 {
   "type": "TERMINATE_SCRIPT",
   "command_id": "cmd_98765",

@@ -30,18 +30,53 @@ Item {
                 Layout.preferredWidth: 130
             }
 
+            // Predefined scripts are extensions for small routine tasks, so
+            // execution is capped. The client clamps this to 900s regardless.
+            Label { text: "Limit" }
+
+            SpinBox {
+                id: scriptTimeout
+                from: 10
+                to: 900
+                stepSize: 30
+                value: 300
+                editable: true
+                Layout.preferredWidth: 120
+
+                textFromValue: function (value) { return value + "s" }
+                valueFromText: function (text) { return parseInt(text) || 300 }
+            }
+
             Button {
                 text: "Run script"
                 enabled: root.ready && scriptInput.text.trim().length > 0
                 // Validated locally before it is sent; a script that will not
                 // compile never reaches a lab machine.
-                onClicked: backend.sendScript(scriptInput.text, scriptType.currentText)
+                onClicked: backend.sendScript(
+                    scriptInput.text, scriptType.currentText, scriptTimeout.value)
             }
 
             Button {
                 text: "Screenshot"
                 enabled: root.ready
                 onClicked: backend.captureScreen(80)
+            }
+
+            ToolSeparator {}
+
+            // Indeterminate to the student: no countdown is shown on the
+            // client. The internal cap is an admin fail-safe, surfaced here
+            // as a warning rather than there as a deadline.
+            Button {
+                text: "Pause"
+                enabled: root.ready
+                onClicked: backend.pauseSelected()
+            }
+
+            Button {
+                text: "Resume"
+                enabled: root.ready
+                onClicked: backend.resumeSelected()
             }
         }
 
