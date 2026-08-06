@@ -1,0 +1,14 @@
+# Administrator GUI — Windows.
+#
+#   pip install -r requirements.txt -r requirements-admin.txt
+
+# Qt 6 + QML. PySide6 is the official Qt-for-Python binding (LGPL). Note the
+# README's Deployment section originally said PyQt6; PySide6 is the deliberate
+# choice, and the README has been corrected.
+PySide6==6.11.1
+
+# Runs asyncio on top of Qt's event loop, so the GUI, the Engine socket and
+# every background task share one thread. Chosen over a socket thread to keep
+# the README's concurrency rule intact: threads are only for work that cannot
+# signal readiness, and sockets can.
+qasync==0.28.0

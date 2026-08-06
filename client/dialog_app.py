@@ -12,14 +12,19 @@ Exit codes are the interface:
     0  OK / acknowledged
     1  Cancelled
     2  Timed out with no answer
-    3  Bad arguments
+    3  Bad arguments or the UI failed to start
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+
+from PySide6.QtCore import Property, QTimer, Signal, Slot
+
+from client.ui_host import HEADLESS_ENV, BaseBridge, build_engine, create_app
 
 logger = logging.getLogger(__name__)
 
@@ -29,77 +34,105 @@ EXIT_TIMEOUT = 2
 EXIT_BAD_ARGS = 3
 
 
-def run_dialog(title: str, message: str, timeout: int, allow_cancel: bool) -> int:
-    """Show the dialog and return the exit code for whatever happened."""
-    import tkinter as tk
+class DialogBridge(BaseBridge):
+    """State and answers for Dialog.qml."""
 
-    outcome = {"code": EXIT_TIMEOUT}
+    finished = Signal(int)
+    titleChanged = Signal()
+    allowCancelChanged = Signal()
+    totalSecondsChanged = Signal()
+    remainingSecondsChanged = Signal()
 
-    root = tk.Tk()
-    root.title(title)
-    root.configure(bg="#161b22")
-    root.resizable(False, False)
-    root.attributes("-topmost", True)
+    def __init__(self, title: str, message: str, timeout: int,
+                 allow_cancel: bool, show_windows: bool) -> None:
+        super().__init__(message, show_windows)
+        self._title = title
+        self._timeout = max(0, timeout)
+        self._remaining = self._timeout
+        self._allow_cancel = allow_cancel
+        self.result = EXIT_TIMEOUT
 
-    # A warning nobody sees is useless, so it opens centred and focused.
-    root.eval("tk::PlaceWindow . center")
+    def _get_title(self) -> str:
+        return self._title
 
-    frame = tk.Frame(root, bg="#161b22", padx=28, pady=22)
-    frame.pack()
+    title = Property(str, _get_title, notify=titleChanged)
 
-    tk.Label(frame, text=title, font=("Segoe UI", 13, "bold"),
-             fg="#e6edf3", bg="#161b22").pack(anchor="w")
+    def _get_allow_cancel(self) -> bool:
+        return self._allow_cancel
 
-    tk.Label(frame, text=message, font=("Segoe UI", 10), fg="#8b949e",
-             bg="#161b22", wraplength=380, justify="left").pack(anchor="w", pady=(8, 16))
+    allowCancel = Property(bool, _get_allow_cancel, notify=allowCancelChanged)
 
-    remaining = tk.Label(frame, text="", font=("Segoe UI", 9), fg="#6e7681", bg="#161b22")
-    remaining.pack(anchor="w")
+    def _get_total(self) -> int:
+        return self._timeout
 
-    buttons = tk.Frame(frame, bg="#161b22")
-    buttons.pack(anchor="e", pady=(14, 0))
+    totalSeconds = Property(int, _get_total, notify=totalSecondsChanged)
 
-    def finish(code: int) -> None:
-        outcome["code"] = code
-        root.destroy()
+    def _get_remaining(self) -> int:
+        return self._remaining
 
-    if allow_cancel:
-        tk.Button(buttons, text="Cancel", width=10,
-                  command=lambda: finish(EXIT_CANCELLED)).pack(side="right", padx=(8, 0))
+    remainingSeconds = Property(int, _get_remaining, notify=remainingSecondsChanged)
 
-    tk.Button(buttons, text="OK", width=10, default="active",
-              command=lambda: finish(EXIT_OK)).pack(side="right")
+    @Slot()
+    def accept(self) -> None:
+        self._finish(EXIT_OK)
 
-    root.bind("<Return>", lambda _event: finish(EXIT_OK))
-    if allow_cancel:
-        root.bind("<Escape>", lambda _event: finish(EXIT_CANCELLED))
+    @Slot()
+    def cancel(self) -> None:
+        # Ignored when cancelling was not offered: a warning that must be
+        # acknowledged should not be dismissible.
+        if self._allow_cancel:
+            self._finish(EXIT_CANCELLED)
 
-    # Closing the window is a cancel when cancelling is allowed, and is ignored
-    # otherwise — an unacknowledgeable warning should not be dismissible.
-    root.protocol(
-        "WM_DELETE_WINDOW",
-        (lambda: finish(EXIT_CANCELLED)) if allow_cancel else (lambda: None),
-    )
+    def tick(self) -> None:
+        self._remaining -= 1
+        self.remainingSecondsChanged.emit()
+        if self._remaining <= 0:
+            self._finish(EXIT_TIMEOUT)
 
-    countdown = {"left": timeout}
+    def _finish(self, code: int) -> None:
+        self.result = code
+        self.finished.emit(code)
 
-    def tick() -> None:
-        if countdown["left"] <= 0:
-            finish(EXIT_TIMEOUT)
-            return
-        remaining.config(text=f"Closing automatically in {countdown['left']}s")
-        countdown["left"] -= 1
-        root.after(1000, tick)
 
-    if timeout > 0:
-        tick()
+def _show(app, bridge: DialogBridge, timeout: int, headless: bool) -> int:
+    """Own the QML engine for exactly as long as the window is up.
 
+    The engine lives and dies inside this frame, while `app` and `bridge` are
+    held by the caller. That ordering is the whole point: if the bridge is
+    collected first, the still-live QML bindings re-evaluate against a dead
+    object and the process spews "Cannot read property of null" on every exit.
+    """
     try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        return EXIT_CANCELLED
+        engine = build_engine(app, bridge, "Dialog.qml")
+    except RuntimeError:
+        logger.exception("Dialog UI failed to start")
+        return EXIT_BAD_ARGS
 
-    return outcome["code"]
+    bridge.finished.connect(lambda _code: app.quit())
+
+    countdown = QTimer()
+    countdown.setInterval(1000)
+    countdown.timeout.connect(bridge.tick)
+    if timeout > 0:
+        countdown.start()
+
+    if headless:
+        # Loaded and validated; nothing to show.
+        QTimer.singleShot(0, app.quit)
+
+    app.exec()
+    countdown.stop()
+
+    return EXIT_OK if headless else bridge.result
+
+
+def run_dialog(title: str, message: str, timeout: int, allow_cancel: bool) -> int:
+    headless = os.environ.get(HEADLESS_ENV) == "1"
+
+    app = create_app("Lab Monitor Notice")
+    bridge = DialogBridge(title, message, timeout, allow_cancel, not headless)
+
+    return _show(app, bridge, timeout, headless)
 
 
 def main(argv: list[str] | None = None) -> int:

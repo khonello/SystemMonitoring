@@ -1,16 +1,27 @@
-# Client Agent extras — Windows only. Install alongside requirements.txt on
-# lab machines and on the Windows development box:
+# Client Agent — Windows only.
 #
 #   pip install -r requirements.txt -r requirements-client.txt
-#
-# Not needed until Phase 4 (see todo.md); listed now so the dependency is
-# pinned rather than discovered later.
 
-# Windows service installation and Win32 API access (service registration,
-# scheduled-task registration for the lockout watchdog).
-pywin32==312
+# Monitoring collectors.
+psutil==7.2.2
 
 # Screen capture. ImageGrab is Windows/macOS only, which is fine — the Client
 # Agent is Windows-only. The executor degrades to a clear error rather than
 # crashing if this is absent.
 Pillow==12.3.0
+
+# The lockout overlay and the warning dialog are QML, matching the Admin GUI
+# rather than introducing a second toolkit for two windows. QML also gives the
+# frameless, translucent, animated windows the design calls for, which tkinter
+# does not do well.
+#
+# This is why the helper executables must be frozen with PyInstaller rather
+# than run on an embeddable Python distribution: embeddable has no pip, so it
+# cannot carry PySide6. Note this does NOT constrain the script-execution
+# runtime, which is a separate interpreter and can still be embeddable — see
+# issues.md C2.
+PySide6==6.11.1
+
+# Windows service installation and Win32 API access (service registration,
+# scheduled-task registration for the lockout watchdog).
+pywin32==312
