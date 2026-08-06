@@ -1,5 +1,4 @@
-// Live monitoring dashboard.
-// PHASE 1 SCAFFOLD - placeholders where Phase 3 binds real data.
+// Live monitoring for the selected client.
 
 import QtQuick
 import QtQuick.Controls
@@ -8,26 +7,24 @@ import QtQuick.Layouts
 Item {
     id: root
 
-    property string selectedClient: ""
-
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 8
         spacing: 8
 
         Label {
-            text: root.selectedClient !== ""
-                ? "Monitoring: " + root.selectedClient
+            text: backend.selectedClient !== ""
+                ? "Live data: " + backend.selectedClient
                 : "Select a client"
             font.bold: true
             font.pixelSize: 14
         }
 
         TabBar {
-            id: tabs
+            id: innerTabs
             Layout.fillWidth: true
 
-            TabButton { text: "Applications" }
+            TabButton { text: "Applications (" + applicationModel.rowCount() + ")" }
             TabButton { text: "Network" }
             TabButton { text: "USB Events" }
         }
@@ -35,27 +32,41 @@ Item {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: tabs.currentIndex
+            currentIndex: innerTabs.currentIndex
 
-            // TODO(Phase 3): replace each placeholder with a TableView bound
-            // to data pushed from the Engine.
-            Placeholder { message: "Application usage - Phase 3" }
-            Placeholder { message: "Network usage - Phase 3" }
-            Placeholder { message: "USB events - Phase 3" }
-        }
-    }
+            DataList {
+                model: applicationModel
+                emptyText: "No application data received yet.\n" +
+                           "The client's process monitor is a Phase 4 stub."
+                primary: function (m) { return m.process_name || "" }
+                secondary: function (m) {
+                    return "pid " + (m.pid || "?") + "   " + (m.window_title || "")
+                }
+                trailing: function (m) {
+                    return (m.cpu_percent || 0).toFixed(1) + "% CPU   " +
+                           (m.memory_mb || 0).toFixed(0) + " MB"
+                }
+            }
 
-    component Placeholder: Rectangle {
-        property string message: ""
+            DataList {
+                model: networkModel
+                emptyText: "No network samples received yet."
+                primary: function (m) { return m.timestamp || "" }
+                secondary: function (m) {
+                    return (m.active_connections || 0) + " active connections"
+                }
+                trailing: function (m) {
+                    return "sent " + (m.bytes_sent || 0) + "   recv " + (m.bytes_received || 0)
+                }
+            }
 
-        color: "transparent"
-        border.width: 1
-        border.color: Qt.rgba(0.5, 0.5, 0.5, 0.3)
-
-        Label {
-            anchors.centerIn: parent
-            text: parent.message
-            opacity: 0.5
+            DataList {
+                model: usbModel
+                emptyText: "No USB events received yet."
+                primary: function (m) { return m.device_name || "" }
+                secondary: function (m) { return m.timestamp || "" }
+                trailing: function (m) { return m.event || m.event_type || "" }
+            }
         }
     }
 }

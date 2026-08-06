@@ -87,6 +87,23 @@ MSG_SET_WEBSITE_POLICY: Final[str] = "SET_WEBSITE_POLICY"
 
 MSG_ADMIN_COMMAND: Final[str] = "ADMIN_COMMAND"
 MSG_CLIENT_LIST: Final[str] = "CLIENT_LIST"
+MSG_REPORT_REQUEST: Final[str] = "REPORT_REQUEST"
+MSG_REPORT: Final[str] = "REPORT"
+
+# Report kinds an admin may request. Each maps to one engine.database query.
+REPORT_NETWORK_24H: Final[str] = "network_24h"
+REPORT_NETWORK_WEEKLY: Final[str] = "network_weekly"
+REPORT_APP_USAGE: Final[str] = "app_usage"
+REPORT_USB_EVENTS: Final[str] = "usb_events"
+REPORT_COMMAND_HISTORY: Final[str] = "command_history"
+
+VALID_REPORTS: Final[frozenset[str]] = frozenset({
+    REPORT_NETWORK_24H,
+    REPORT_NETWORK_WEEKLY,
+    REPORT_APP_USAGE,
+    REPORT_USB_EVENTS,
+    REPORT_COMMAND_HISTORY,
+})
 
 # Every command the Engine may forward to a Client Agent. Used to validate an
 # ADMIN_COMMAND's command_type before routing it.

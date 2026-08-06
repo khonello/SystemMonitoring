@@ -1,5 +1,4 @@
 // Administrator GUI shell.
-// PHASE 1 SCAFFOLD - layout only, no live data.
 
 import QtQuick
 import QtQuick.Controls
@@ -8,8 +7,8 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: window
 
-    width: 1100
-    height: 700
+    width: 1200
+    height: 780
     visible: true
     title: "Lab Monitor - Administrator"
 
@@ -29,15 +28,17 @@ ApplicationWindow {
 
             TextField {
                 id: hostField
-                text: "127.0.0.1"
+                text: defaultHost
                 placeholderText: "Engine host"
-                Layout.preferredWidth: 140
+                enabled: !backend.connected
+                Layout.preferredWidth: 150
             }
 
             TextField {
                 id: portField
-                text: "5000"
+                text: defaultPort
                 placeholderText: "Port"
+                enabled: !backend.connected
                 Layout.preferredWidth: 70
                 validator: IntValidator { bottom: 1; top: 65535 }
             }
@@ -52,11 +53,23 @@ ApplicationWindow {
     }
 
     footer: ToolBar {
-        Label {
-            anchors.left: parent.left
+        RowLayout {
+            anchors.fill: parent
             anchors.leftMargin: 12
-            anchors.verticalCenter: parent.verticalCenter
-            text: backend.status
+            anchors.rightMargin: 12
+
+            Rectangle {
+                width: 10
+                height: 10
+                radius: 5
+                color: backend.connected ? "#2e9e4f" : "#9e2e2e"
+            }
+
+            Label {
+                text: backend.status
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
         }
     }
 
@@ -65,26 +78,81 @@ ApplicationWindow {
         orientation: Qt.Horizontal
 
         ClientList {
-            id: clientList
-            SplitView.preferredWidth: 280
-            SplitView.minimumWidth: 200
+            SplitView.preferredWidth: 300
+            SplitView.minimumWidth: 220
         }
 
         ColumnLayout {
             SplitView.fillWidth: true
             spacing: 0
 
-            MonitoringPanel {
+            TabBar {
+                id: tabs
+                Layout.fillWidth: true
+
+                TabButton { text: "Monitoring" }
+                TabButton { text: "Reports" }
+                TabButton { text: "Policy" }
+            }
+
+            StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                selectedClient: clientList.selectedClient
+                currentIndex: tabs.currentIndex
+
+                MonitoringPanel {}
+                ReportsPanel {}
+                PolicyPanel {}
             }
 
             CommandPanel {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 220
-                selectedClient: clientList.selectedClient
+                Layout.preferredHeight: 260
             }
+        }
+    }
+
+    Dialog {
+        id: validationDialog
+
+        property string detail: ""
+
+        anchors.centerIn: parent
+        width: Math.min(window.width - 80, 560)
+        modal: true
+        standardButtons: Dialog.Ok
+        title: "Script not sent"
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+
+            Label {
+                text: "The script failed validation, so it was not sent to any client."
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 140
+
+                TextArea {
+                    text: validationDialog.detail
+                    readOnly: true
+                    wrapMode: TextEdit.Wrap
+                    font.family: "Consolas, monospace"
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: backend
+
+        function onValidationFailed(message) {
+            validationDialog.detail = message
+            validationDialog.open()
         }
     }
 }

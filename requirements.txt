@@ -13,6 +13,12 @@ psutil==7.2.2
 # choice here.
 PySide6==6.11.1
 
+# Runs asyncio on top of Qt's event loop, so the GUI, the Engine socket and
+# every background task share one thread. Chosen over a socket thread to keep
+# the README's concurrency rule intact: threads are only for work that cannot
+# signal readiness, and sockets can.
+qasync==0.28.0
+
 # Testing
 pytest==9.1.1
 pytest-asyncio==1.4.0

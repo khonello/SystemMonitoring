@@ -31,6 +31,7 @@ from common.constants import (
     MSG_REGISTER_RESPONSE,
     MSG_TERMINATE_PROCESS,
     ROLE_ADMIN,
+    ROLE_CLIENT,
     STATUS_ERROR,
     STREAM_LIMIT,
 )
@@ -252,8 +253,23 @@ async def test_malformed_registration_is_rejected(engine_port):
 
 
 @pytest.mark.asyncio
-async def test_registration_refused_at_capacity(engine_port, monkeypatch):
+async def test_client_registration_refused_at_client_capacity(engine_port, monkeypatch):
     monkeypatch.setattr("engine.main.MAX_CLIENTS", 0)
+
+    reader, writer = await asyncio.open_connection(HOST, engine_port, limit=STREAM_LIMIT)
+    try:
+        await _send(writer, create_message(MSG_REGISTER, {"role": ROLE_CLIENT}, client_id="pc-01"))
+        reply = await _recv(reader)
+
+        assert reply["type"] == MSG_REGISTER_REJECT
+        assert "client capacity" in reply["payload"]["reason"]
+    finally:
+        writer.close()
+
+
+@pytest.mark.asyncio
+async def test_admin_registration_refused_at_admin_capacity(engine_port, monkeypatch):
+    monkeypatch.setattr("engine.main.MAX_ADMINS", 0)
 
     reader, writer = await asyncio.open_connection(HOST, engine_port, limit=STREAM_LIMIT)
     try:
@@ -261,9 +277,19 @@ async def test_registration_refused_at_capacity(engine_port, monkeypatch):
         reply = await _recv(reader)
 
         assert reply["type"] == MSG_REGISTER_REJECT
-        assert "capacity" in reply["payload"]["reason"]
+        assert "admin capacity" in reply["payload"]["reason"]
     finally:
         writer.close()
+
+
+@pytest.mark.asyncio
+async def test_admin_can_connect_when_clients_are_at_capacity(engine_port, monkeypatch):
+    """The caps are separate so a full lab can still be administered — an
+    operator must not be locked out exactly when they need to intervene."""
+    monkeypatch.setattr("engine.main.MAX_CLIENTS", 0)
+
+    reader, writer = await _open_admin(engine_port)
+    writer.close()
 
 
 @pytest.mark.asyncio

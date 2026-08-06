@@ -22,6 +22,7 @@ from common.constants import (
     MSG_REGISTER_REJECT,
     MSG_REGISTER_RESPONSE,
     REGISTRATION_TIMEOUT,
+    ROLE_ADMIN,
     ROLE_CLIENT,
     STREAM_LIMIT,
     VALID_ROLES,
@@ -38,8 +39,12 @@ from engine.command_handler import process_message
 from engine.config import (
     CLIENT_HEARTBEAT_TIMEOUT,
     LOG_LEVEL,
+    MAX_ADMINS,
     MAX_CLIENTS,
+    PRUNE_BATCH_SIZE,
+    PRUNE_INTERVAL,
     REAP_INTERVAL,
+    RETENTION_DAYS,
     SERVER_HOST,
     SERVER_PORT,
 )
@@ -123,8 +128,13 @@ async def perform_registration(
         await _reject(writer, f"invalid role {role!r}")
         return None
 
-    if connection_manager.connection_count() >= MAX_CLIENTS:
-        await _reject(writer, "server at capacity")
+    # Capped per role. A single combined cap would refuse an admin once the
+    # lab hit its client ceiling — exactly when an operator needs to connect.
+    if role == ROLE_CLIENT and len(connection_manager.get_client_ids()) >= MAX_CLIENTS:
+        await _reject(writer, "server at client capacity")
+        return None
+    if role == ROLE_ADMIN and len(connection_manager.get_admin_ids()) >= MAX_ADMINS:
+        await _reject(writer, "server at admin capacity")
         return None
 
     # A hard, visible skip of the whole handshake - no nonce is sent and no
@@ -178,7 +188,18 @@ async def handle_client(
     address = writer.get_extra_info("peername")
     logger.info("Connection from %s", address)
 
-    registration = await perform_registration(reader, writer, address)
+    try:
+        registration = await perform_registration(reader, writer, address)
+    except asyncio.CancelledError:
+        await close_writer(writer)
+        raise
+    except Exception:
+        # Fail closed. An error escaping here would otherwise leave the socket
+        # open with the peer waiting forever on a reply that never comes.
+        logger.exception("Registration failed for %s", address)
+        await close_writer(writer)
+        return
+
     if registration is None:
         await close_writer(writer)
         return
@@ -244,12 +265,56 @@ async def reap_stale_connections() -> None:
         except asyncio.TimeoutError:
             pass
 
+        # Applies to admins too: the Admin GUI heartbeats on the same interval
+        # as a Client Agent, precisely so this stays one uniform liveness rule
+        # rather than a per-role special case.
         for peer_id in connection_manager.find_stale(CLIENT_HEARTBEAT_TIMEOUT):
             logger.warning("Reaping stale peer %s", peer_id)
             writer = connection_manager.get_writer(peer_id)
             connection_manager.unregister(peer_id)
             if writer is not None:
                 await close_writer(writer)
+
+
+async def prune_loop() -> None:
+    """Delete monitoring data past the retention window, periodically.
+
+    Batched with an await between each pass so a large sweep cannot stall the
+    Engine. Disabled entirely when RETENTION_DAYS is 0.
+    """
+    if RETENTION_DAYS <= 0:
+        logger.warning("Retention pruning DISABLED - monitoring data will grow unbounded")
+        return
+
+    shutdown = _get_shutdown()
+    logger.info("Retention: %d days, sweeping every %ds", RETENTION_DAYS, PRUNE_INTERVAL)
+
+    while not shutdown.is_set():
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=PRUNE_INTERVAL)
+            return
+        except asyncio.TimeoutError:
+            pass
+
+        total: dict[str, int] = {}
+        try:
+            while not shutdown.is_set():
+                # Off the loop: a sweep can touch millions of rows. This is the
+                # one place the README's "threads only for work that cannot
+                # signal readiness" rule applies on the Engine.
+                removed = await asyncio.to_thread(
+                    database.prune_batch_threadsafe, RETENTION_DAYS, PRUNE_BATCH_SIZE
+                )
+                for table, count in removed.items():
+                    total[table] = total.get(table, 0) + count
+                if not any(removed.values()):
+                    break
+        except Exception:
+            logger.exception("Retention sweep failed")
+            continue
+
+        if any(total.values()):
+            logger.info("Retention sweep removed %s", total)
 
 
 # ---------------------------------------------------------------------------
@@ -272,17 +337,18 @@ async def start_server() -> None:
     bound = ", ".join(str(sock.getsockname()) for sock in server.sockets)
     logger.info("Engine listening on %s (max %d peers)", bound, MAX_CLIENTS)
 
-    reaper = asyncio.create_task(reap_stale_connections())
+    background = [
+        asyncio.create_task(reap_stale_connections(), name="reaper"),
+        asyncio.create_task(prune_loop(), name="pruner"),
+    ]
 
     async with server:
         await _get_shutdown().wait()
 
     logger.info("Shutting down")
-    reaper.cancel()
-    try:
-        await reaper
-    except asyncio.CancelledError:
-        pass
+    for task in background:
+        task.cancel()
+    await asyncio.gather(*background, return_exceptions=True)
 
 
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:

@@ -49,10 +49,15 @@ CREATE TABLE IF NOT EXISTS clients (
     status      TEXT
 );
 
+-- `pid` is not in the README's schema, but the client sends it in every
+-- APP_DATA entry and it is the only way to tell two runs of the same
+-- executable apart. `end_time` stays nullable: these are periodic samples, not
+-- sessions, so duration is derived as (last sample - start_time) at query time.
 CREATE TABLE IF NOT EXISTS app_logs (
     id           INTEGER PRIMARY KEY,
     client_id    TEXT,
     process_name TEXT,
+    pid          INTEGER,
     window_title TEXT,
     start_time   TIMESTAMP,
     end_time     TIMESTAMP,
@@ -91,6 +96,15 @@ CREATE TABLE IF NOT EXISTS command_log (
 );
 
 -- Every query in this project filters by client and orders by time.
+--
+-- Exactly one index on app_logs, deliberately. A composite
+-- (client_id, start_time, process_name) was tried to speed up
+-- get_app_usage_summary's grouping; benchmarking could not show a reliable
+-- benefit — the summary held at ~25ms in every configuration, while insert
+-- timings varied by more than the effect being measured (22-39ms across
+-- identical runs). Bounding table growth via retention is the fix that
+-- actually addresses that query's cost. Re-measure on a quiet machine before
+-- adding indexes here.
 CREATE INDEX IF NOT EXISTS idx_app_logs_client_time
     ON app_logs(client_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_network_client_time
@@ -273,6 +287,7 @@ def store_app_data(client_id: str, apps: list[dict[str, Any]]) -> int:
         (
             client_id,
             app.get("process_name"),
+            app.get("pid"),
             app.get("window_title"),
             app.get("start_time"),
             app.get("cpu_percent"),
@@ -284,9 +299,9 @@ def store_app_data(client_id: str, apps: list[dict[str, Any]]) -> int:
     with get_connection() as connection:
         connection.executemany(
             """
-            INSERT INTO app_logs (client_id, process_name, window_title,
+            INSERT INTO app_logs (client_id, process_name, pid, window_title,
                                   start_time, cpu_usage, memory_mb)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -500,32 +515,82 @@ def get_weekly_network_summary(client_id: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def prune_older_than(days: int) -> dict[str, int]:
-    """Delete monitoring rows older than `days`. Returns rows removed per table.
+PRUNED_TABLES: tuple[tuple[str, str], ...] = (
+    ("app_logs", "start_time"),
+    ("network_usage", "timestamp"),
+    ("usb_events", "timestamp"),
+    ("command_log", "timestamp"),
+)
 
-    Needed because app_logs grows fast: a client reporting ~80 processes every
-    30 seconds writes roughly 230,000 rows a day, so the design ceiling of 50
-    clients produces on the order of 11 million rows a day. Nothing calls this
-    automatically yet — retention period and schedule are a deployment
-    decision, so it is exposed and left to be wired up.
-    """
-    cutoff = _window_start(days * 24)
+
+# SQLite only honours `DELETE ... LIMIT` when compiled with
+# SQLITE_ENABLE_UPDATE_DELETE_LIMIT, which Python's bundled build is not, so
+# the bound is expressed as a subquery instead.
+_PRUNE_SQL = (
+    "DELETE FROM {table} WHERE id IN ("
+    "    SELECT id FROM {table} WHERE {column} < ? LIMIT ?"
+    ")"
+)
+
+
+def _prune_with(connection: sqlite3.Connection, cutoff: str, limit: int) -> dict[str, int]:
+    """Run one bounded prune pass on an already-open connection."""
     removed: dict[str, int] = {}
-
-    with get_connection() as connection:
-        for table, column in (
-            ("app_logs", "start_time"),
-            ("network_usage", "timestamp"),
-            ("usb_events", "timestamp"),
-            ("command_log", "timestamp"),
-        ):
-            cursor = connection.execute(
-                f"DELETE FROM {table} WHERE {column} < ?", (cutoff,)  # noqa: S608
-            )
-            removed[table] = cursor.rowcount
-
-    logger.info("Pruned rows older than %d days: %s", days, removed)
+    for table, column in PRUNED_TABLES:
+        cursor = connection.execute(
+            _PRUNE_SQL.format(table=table, column=column), (cutoff, limit)
+        )
+        removed[table] = cursor.rowcount
     return removed
+
+
+def prune_batch(days: int, limit: int) -> dict[str, int]:
+    """Delete up to `limit` rows older than `days` from each table.
+
+    Bounded on purpose. app_logs grows at roughly 230,000 rows a day per
+    client, so at the 50-client ceiling an unbounded DELETE would block the
+    Engine's event loop for as long as it took to remove millions of rows. The
+    caller loops until every count is zero, yielding in between.
+    """
+    with get_connection() as connection:
+        return _prune_with(connection, _window_start(days * 24), limit)
+
+
+def prune_batch_threadsafe(days: int, limit: int) -> dict[str, int]:
+    """prune_batch for a worker thread, on its own connection.
+
+    The shared connection belongs to the event-loop thread — sqlite3's
+    check_same_thread enforces that, deliberately. A prune sweep is large
+    enough to be worth moving off the loop, and self-contained enough that its
+    own short-lived connection is safe.
+    """
+    connection = sqlite3.connect(_db_path)
+    try:
+        removed = _prune_with(connection, _window_start(days * 24), limit)
+        connection.commit()
+        return removed
+    finally:
+        connection.close()
+
+
+def prune_older_than(days: int, batch_size: int = 5_000) -> dict[str, int]:
+    """Delete all monitoring rows older than `days`, in batches.
+
+    Synchronous and unbounded in total work — fine for tests and for a manual
+    sweep, but the Engine uses prune_batch directly so it can yield between
+    batches. See engine.main.prune_loop.
+    """
+    total: dict[str, int] = {table: 0 for table, _ in PRUNED_TABLES}
+
+    while True:
+        removed = prune_batch(days, batch_size)
+        for table, count in removed.items():
+            total[table] += count
+        if not any(removed.values()):
+            break
+
+    logger.info("Pruned rows older than %d days: %s", days, total)
+    return total
 
 
 def get_usb_events(client_id: str, limit: int = 100) -> list[dict[str, Any]]:

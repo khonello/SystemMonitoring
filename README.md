@@ -2041,11 +2041,13 @@ python client\main.py
 
 #### Admin GUI Installation (Windows)
 ```powershell
-# Install Qt dependencies
-pip install PyQt6
+# Install Qt dependencies. PySide6 is the official Qt-for-Python binding
+# (LGPL); qasync integrates asyncio with Qt's event loop so the GUI stays
+# single-threaded, matching the concurrency model used everywhere else.
+pip install PySide6 qasync
 
 # Run GUI
-python admin_gui\main.py
+python -m admin_gui.main
 ```
 
 ### Configuration

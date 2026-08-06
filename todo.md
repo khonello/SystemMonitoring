@@ -144,33 +144,60 @@ present but empty. No real logic in this phase.
 - **Timestamps are ISO-8601 UTC strings.** Fixed width, so lexicographic
   comparison is chronological and `WHERE timestamp >= ?` works directly.
 
-**Open item carried forward:**
+**Follow-up items, all since resolved — see [issues.md](issues.md) section B:**
 
-- [ ] **Retention is not scheduled.** `database.prune_older_than(days)` exists
-      and is tested, but nothing calls it. `app_logs` grows fast — ~80 processes
-      every 30s is roughly 230k rows/day/client, so 50 clients produce on the
-      order of 11M rows/day. Retention period and schedule are a deployment
-      decision, so this needs an explicit call before any long-running install.
+- [x] Retention scheduled, batched and off the event loop (B3)
+- [x] `get_app_usage_summary` — index measured, reverted, retention is the fix (B4)
+- [x] Idle admin connections no longer dropped (B1)
+- [x] Client and admin capacity capped separately (B2)
 
 - [x] **Gate: Engine fully tested standalone before Admin work begins**
 
 ---
 
-## Phase 3 — Admin GUI (full implementation, tested before Phase 4 starts)
+## Phase 3 — Admin GUI (full implementation) ✅
 
-- [ ] PySide6 + QML app shell
-- [ ] **Resolve the asyncio ↔ Qt event-loop integration** (`qasync`, a QTimer
-      pump, or a socket thread) — decide early, it shapes `backend.py`
-- [ ] Socket client to Engine; live client list
-- [ ] Monitoring dashboard with real-time updates via signals/slots
-- [ ] Command panel: script send, screen capture, terminate process/script
-- [ ] Reports viewer (24h / weekly)
-- [ ] Policy editor: website blacklist/whitelist **with the `mode` field explicit**,
-      app blacklist (blacklist-only by design), time schedules
-- [ ] Script pre-send validation via the bundled interpreter (`py_compile`)
-- [ ] Local prefs storage (QSettings or config file — not a database)
-- [ ] Tests
-- [ ] **Gate: Admin fully tested against the completed Engine before Client work begins**
+- [x] PySide6 + QML app shell
+- [x] **asyncio ↔ Qt integration: qasync** (issues.md B5). Chosen because the
+      README's concurrency rule says threads are only for work that cannot
+      signal readiness — sockets can, so a socket thread would have
+      contradicted the model used everywhere else. GUI, socket and background
+      tasks all share one thread.
+- [x] **Idle-admin disconnection fixed** (issues.md B1) — the Admin GUI
+      heartbeats on the same 15s interval a Client Agent uses
+- [x] `connection.py` — admin session as a class, not module state, so tests
+      can stand up more than one at a time
+- [x] Live client list, including clients that are known but currently offline
+- [x] Monitoring dashboard: applications, network samples, USB events, buffered
+      **per client** so switching selection loses nothing
+- [x] Command panel: script send, screen capture, terminate process/script,
+      with script output streamed in as it arrives
+- [x] Reports viewer — 24h network, per-day weekly, app usage, USB events,
+      command history. Admins never touch the database; every query goes
+      through the Engine via `REPORT_REQUEST`.
+- [x] Policy editor: website blacklist/whitelist **with `mode` always explicit**
+      and the whitelist tradeoff spelled out in the UI; app blacklist
+      (blacklist-only by design)
+- [x] Script pre-send validation (`py_compile` in a subprocess, so the check
+      runs under the interpreter version the client will use)
+- [x] Local prefs in QSettings — remembers the address that actually connected,
+      not the one prefilled at startup
+- [x] Tests: **126 passing**, 30 of them new for the Admin GUI
+- [x] Verified end-to-end against a live Engine under WSL with a real client:
+      roster, live telemetry relay, validation rejection, command round trip,
+      all five reports, and policy dispatch reaching the audit trail
+- [ ] Time-schedule editor — deferred to Phase 4, where the lockout overlay
+      that enforces it is built. Editing schedules with nothing to enforce them
+      would be UI without behaviour.
+- [x] **Gate: Admin tested against the completed Engine before Client work begins**
+
+**Engine changes this phase required:**
+
+- `APP_DATA` / `NETWORK_DATA` / `USB_EVENT` are now relayed to admins for the
+  live dashboard (scale caveat in issues.md C5)
+- New `REPORT_REQUEST` / `REPORT` message pair, with five report kinds
+- `CLIENT_LIST` merges the live registry with the database, so a client that
+  disconnects does not vanish from the operator's list
 
 ---
 

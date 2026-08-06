@@ -1,5 +1,4 @@
-// Command dispatch.
-// PHASE 1 SCAFFOLD - controls call backend slots that only log.
+// Command dispatch and live script output.
 
 import QtQuick
 import QtQuick.Controls
@@ -8,9 +7,7 @@ import QtQuick.Layouts
 Item {
     id: root
 
-    property string selectedClient: ""
-
-    readonly property bool ready: backend.connected && root.selectedClient !== ""
+    readonly property bool ready: backend.connected && backend.selectedClient !== ""
 
     ColumnLayout {
         anchors.fill: parent
@@ -35,30 +32,48 @@ Item {
 
             Button {
                 text: "Run script"
-                enabled: root.ready && scriptInput.text.length > 0
-                onClicked: backend.sendScript(
-                    root.selectedClient, scriptInput.text, scriptType.currentText)
+                enabled: root.ready && scriptInput.text.trim().length > 0
+                // Validated locally before it is sent; a script that will not
+                // compile never reaches a lab machine.
+                onClicked: backend.sendScript(scriptInput.text, scriptType.currentText)
             }
 
             Button {
                 text: "Screenshot"
                 enabled: root.ready
-                onClicked: backend.captureScreen(root.selectedClient, 80)
+                onClicked: backend.captureScreen(80)
             }
         }
 
-        ScrollView {
+        SplitView {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            orientation: Qt.Horizontal
 
-            TextArea {
-                id: scriptInput
-                placeholderText: root.ready
-                    ? "Script to run on " + root.selectedClient
-                    : "Connect and select a client"
-                enabled: root.ready
-                wrapMode: TextEdit.NoWrap
-                font.family: "Consolas, monospace"
+            ScrollView {
+                SplitView.preferredWidth: root.width * 0.5
+
+                TextArea {
+                    id: scriptInput
+                    enabled: root.ready
+                    wrapMode: TextEdit.NoWrap
+                    font.family: "Consolas, monospace"
+                    placeholderText: root.ready
+                        ? "Script to run on " + backend.selectedClient
+                        : "Connect and select a client"
+                }
+            }
+
+            ScrollView {
+                SplitView.fillWidth: true
+
+                TextArea {
+                    id: outputView
+                    readOnly: true
+                    wrapMode: TextEdit.NoWrap
+                    font.family: "Consolas, monospace"
+                    placeholderText: "Script output appears here as it arrives"
+                }
             }
         }
 
@@ -67,9 +82,9 @@ Item {
 
             TextField {
                 id: processName
-                placeholderText: "Process name, e.g. chrome.exe"
-                enabled: root.ready
                 Layout.fillWidth: true
+                enabled: root.ready
+                placeholderText: "Process name, e.g. chrome.exe"
             }
 
             CheckBox {
@@ -80,10 +95,30 @@ Item {
 
             Button {
                 text: "Terminate"
-                enabled: root.ready && processName.text.length > 0
-                onClicked: backend.terminateProcess(
-                    root.selectedClient, processName.text, forceKill.checked)
+                enabled: root.ready && processName.text.trim().length > 0
+                onClicked: backend.terminateProcess(processName.text.trim(), forceKill.checked)
             }
+
+            ToolSeparator {}
+
+            Button {
+                text: "Clear output"
+                onClicked: outputView.text = ""
+            }
+        }
+    }
+
+    Connections {
+        target: backend
+
+        // Streamed in chunks as the script produces output - a long-running
+        // script reports continuously rather than only at exit.
+        function onCommandOutput(commandId, chunk) {
+            outputView.append(chunk.replace(/\n$/, ""))
+        }
+
+        function onCommandFinished(commandId, status, message) {
+            outputView.append("--- " + commandId + ": " + status + " " + message)
         }
     }
 }

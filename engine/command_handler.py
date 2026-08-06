@@ -28,9 +28,18 @@ from common.constants import (
     MSG_COMMAND_RESPONSE,
     MSG_HEARTBEAT,
     MSG_NETWORK_DATA,
+    MSG_REPORT,
+    MSG_REPORT_REQUEST,
     MSG_USB_EVENT,
+    REPORT_APP_USAGE,
+    REPORT_COMMAND_HISTORY,
+    REPORT_NETWORK_24H,
+    REPORT_NETWORK_WEEKLY,
+    REPORT_USB_EVENTS,
     ROLE_ADMIN,
     STATUS_ERROR,
+    STATUS_SUCCESS,
+    VALID_REPORTS,
 )
 from common.protocol import create_message, get_payload
 from common.utils import new_command_id
@@ -57,6 +66,7 @@ async def handle_app_data(peer_id: str, payload: dict[str, Any]) -> None:
     apps = payload.get("applications", [])
     stored = database.store_app_data(peer_id, apps)
     logger.info("APP_DATA from %s: %d applications stored", peer_id, stored)
+    await _relay_to_admins(MSG_APP_DATA, peer_id, payload)
 
 
 async def handle_network_data(peer_id: str, payload: dict[str, Any]) -> None:
@@ -67,6 +77,7 @@ async def handle_network_data(peer_id: str, payload: dict[str, Any]) -> None:
         payload.get("bytes_received"),
     )
     database.store_network_data(peer_id, payload)
+    await _relay_to_admins(MSG_NETWORK_DATA, peer_id, payload)
 
 
 async def handle_usb_event(peer_id: str, payload: dict[str, Any]) -> None:
@@ -77,6 +88,7 @@ async def handle_usb_event(peer_id: str, payload: dict[str, Any]) -> None:
         payload.get("device_name"),
     )
     database.store_usb_event(peer_id, payload)
+    await _relay_to_admins(MSG_USB_EVENT, peer_id, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -176,10 +188,77 @@ async def handle_admin_command(peer_id: str, payload: dict[str, Any]) -> None:
 
 
 async def handle_client_list_request(peer_id: str, payload: dict[str, Any]) -> None:
-    """Answer an admin's request for the current client roster."""
+    """Answer an admin's request for the current client roster.
+
+    Merges the live registry with the database so clients that are known but
+    currently offline still appear, rather than silently vanishing from the
+    admin's list when they disconnect.
+    """
+    connected = {entry["client_id"]: entry for entry in connection_manager.get_connected_clients()}
+
+    roster: list[dict[str, Any]] = []
+    for stored in database.get_all_clients():
+        client_id = stored["client_id"]
+        live = connected.pop(client_id, None)
+        roster.append({**stored, **(live or {}), "connected": live is not None})
+
+    # Anything still connected but not yet written to the database.
+    roster.extend({**entry, "connected": True} for entry in connected.values())
+
+    await _send_to_peer(peer_id, create_message(MSG_CLIENT_LIST, {"clients": roster}))
+
+
+_REPORT_QUERIES: dict[str, Callable[[str], Any]] = {
+    REPORT_NETWORK_24H: lambda client_id: database.get_network_summary(client_id, hours=24),
+    REPORT_NETWORK_WEEKLY: database.get_weekly_network_summary,
+    REPORT_APP_USAGE: lambda client_id: database.get_app_usage_summary(client_id, hours=24),
+    REPORT_USB_EVENTS: database.get_usb_events,
+    REPORT_COMMAND_HISTORY: database.get_command_history,
+}
+
+
+async def handle_report_request(peer_id: str, payload: dict[str, Any]) -> None:
+    """Run one aggregation query on an admin's behalf.
+
+    Admins never touch the database directly — every read goes through the
+    Engine, which is what keeps the storage layer swappable.
+    """
+    report = payload.get("report", "")
+    client_id = payload.get("client_id", "")
+
+    if report not in VALID_REPORTS:
+        logger.error("Admin %s requested unknown report %r", peer_id, report)
+        await _send_to_peer(
+            peer_id,
+            create_message(
+                MSG_REPORT,
+                {"report": report, "status": STATUS_ERROR,
+                 "message": f"Unknown report: {report!r}"},
+            ),
+        )
+        return
+
+    try:
+        data = _REPORT_QUERIES[report](client_id)
+    except Exception as exc:  # noqa: BLE001 - reported back, not swallowed
+        logger.exception("Report %s failed for %s", report, client_id)
+        await _send_to_peer(
+            peer_id,
+            create_message(
+                MSG_REPORT,
+                {"report": report, "client_id": client_id,
+                 "status": STATUS_ERROR, "message": str(exc)},
+            ),
+        )
+        return
+
     await _send_to_peer(
         peer_id,
-        create_message(MSG_CLIENT_LIST, {"clients": connection_manager.get_connected_clients()}),
+        create_message(
+            MSG_REPORT,
+            {"report": report, "client_id": client_id,
+             "status": STATUS_SUCCESS, "data": data},
+        ),
     )
 
 
@@ -273,6 +352,7 @@ _HANDLERS: dict[str, Handler] = {
     MSG_COMMAND_OUTPUT: handle_command_output,
     MSG_COMMAND_COMPLETE: handle_command_complete,
     MSG_CLIENT_LIST: handle_client_list_request,
+    MSG_REPORT_REQUEST: handle_report_request,
 }
 
 # ADMIN_COMMAND is intentionally absent from _HANDLERS: it is dispatched

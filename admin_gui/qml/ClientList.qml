@@ -1,5 +1,4 @@
-// Connected Client Agents.
-// PHASE 1 SCAFFOLD - bound to clientModel, which stays empty until Phase 3.
+// Known Client Agents, connected or not.
 
 import QtQuick
 import QtQuick.Controls
@@ -7,8 +6,6 @@ import QtQuick.Layouts
 
 Item {
     id: root
-
-    property string selectedClient: ""
 
     ColumnLayout {
         anchors.fill: parent
@@ -42,34 +39,52 @@ Item {
 
             delegate: ItemDelegate {
                 width: listView.width
-                highlighted: root.selectedClient === model.client_id
-                onClicked: root.selectedClient = model.client_id
+                highlighted: backend.selectedClient === model.client_id
+                onClicked: backend.selectedClient = model.client_id
 
-                contentItem: ColumnLayout {
-                    spacing: 2
+                contentItem: RowLayout {
+                    spacing: 8
 
-                    Label {
-                        text: model.client_id || ""
-                        font.bold: true
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
+                    Rectangle {
+                        width: 8
+                        height: 8
+                        radius: 4
+                        color: model.connected ? "#2e9e4f" : "#8a8a8a"
                     }
 
-                    Label {
-                        text: (model.address || "") + "  -  " + (model.status || "")
-                        opacity: 0.6
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
+                    ColumnLayout {
+                        spacing: 2
                         Layout.fillWidth: true
+
+                        Label {
+                            text: model.client_id || ""
+                            font.bold: true
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+
+                        Label {
+                            text: (model.hostname || "") +
+                                  (model.os_type ? "  -  " + model.os_type : "")
+                            opacity: 0.6
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
                     }
                 }
             }
 
             Label {
                 anchors.centerIn: parent
+                width: parent.width - 32
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
                 visible: listView.count === 0
-                text: backend.connected ? "No clients connected" : "Not connected"
                 opacity: 0.5
+                text: backend.connected
+                    ? "No clients have registered yet"
+                    : "Not connected to an Engine"
             }
         }
     }

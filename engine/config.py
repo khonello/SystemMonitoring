@@ -24,12 +24,31 @@ SERVER_PORT: Final[int] = int(os.environ.get("ENGINE_PORT", DEFAULT_ENGINE_PORT)
 # internals, not to this setting's callers.
 DATABASE_PATH: Final[Path] = Path(os.environ.get("ENGINE_DB", "monitoring.db"))
 
+# Client Agents only. Admins are capped separately so that a lab at its client
+# ceiling can still be administered — counting them together would refuse the
+# operator exactly when they most need to connect.
 MAX_CLIENTS: Final[int] = 50
+MAX_ADMINS: Final[int] = 5
 
 CLIENT_HEARTBEAT_TIMEOUT: Final[int] = HEARTBEAT_TIMEOUT
 
 # How often the reaper sweeps for connections that have gone quiet.
 REAP_INTERVAL: Final[int] = 15
+
+# Monitoring data older than this is deleted. app_logs grows at roughly 230k
+# rows per day per client, so something has to bound it; 30 days keeps the
+# README's "weekly aggregated statistics" and "historical trend data" workable
+# without unbounded growth. Set ENGINE_RETENTION_DAYS=0 to disable pruning.
+RETENTION_DAYS: Final[int] = int(os.environ.get("ENGINE_RETENTION_DAYS", 30))
+
+# How often the pruner runs. Six hours: often enough to keep each sweep small,
+# rare enough to stay off the critical path.
+PRUNE_INTERVAL: Final[int] = int(os.environ.get("ENGINE_PRUNE_INTERVAL", 6 * 60 * 60))
+
+# Rows deleted per statement before yielding to the event loop. A single
+# unbounded DELETE across millions of rows would block the Engine for as long
+# as it took.
+PRUNE_BATCH_SIZE: Final[int] = 5_000
 
 LOG_LEVEL: Final[str] = os.environ.get("ENGINE_LOG_LEVEL", "INFO")
 

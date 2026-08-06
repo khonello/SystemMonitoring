@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-`todo.md` at the repo root is the live tracker — read it first. Phases 0–2 are complete: all three components are scaffolded, and the Engine is fully implemented and tested. The Client Agent's monitors and executor are still deliberate stubs (Phase 4), and the Admin GUI has no transport (Phase 3).
+Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, and **`issues.md`** logs known bugs, deferred decisions and unverified claims. Read both before starting a phase — `issues.md` marks which items block which phase.
+
+Phases 0–3 are complete: the Engine and the Admin GUI are fully implemented and tested. The Client Agent's monitors and executor are still deliberate stubs (Phase 4) — commands reach it, get audited, and come back "not implemented", which is the expected state.
+
+`issues.md` section A lists decisions only the user can make (retention period, institutional approval, TLS scope). Don't try to resolve those in code.
 
 `README.md` is the design specification, including reference implementations as fenced code blocks. Where the working code and the README disagree, the code is newer — the deviations and their reasons are recorded in `todo.md`.
 
@@ -13,8 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Run everything through the venv. The project is installed editable, which is what makes `from common.protocol import ...` resolve from every entry point.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                    # 96 tests
-.\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common
+.\.venv\Scripts\python.exe -m pytest -q                    # 126 tests
+.\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common --cov=admin_gui
 .\.venv\Scripts\python.exe -m scripts.bench_database       # SQLite write cost
 .\.venv\Scripts\python.exe -m client.main                  # Client Agent
 .\.venv\Scripts\python.exe -m admin_gui.main               # Administrator GUI
@@ -55,6 +59,10 @@ Wire protocol is newline-delimited JSON over TCP, UTF-8. Every message has `type
 `DEV_BYPASS_AUTH` must skip the handshake **entirely** with an early return before any nonce is sent — deliberately not a validation step that quietly passes, so a forgotten flag is visible in a packet capture. Defaults to off, logs loudly when on.
 
 **Two module globals need resetting between tests, and `tests/conftest.py` does it autouse.** `engine.database` holds its path and connection globally — without isolation, any test touching the Engine writes to the real `monitoring.db` in the repo root. `engine.main._shutdown` is an `asyncio.Event` created lazily per loop; `Event.wait()` binds to the first loop that awaits it and raises `RuntimeError` from any other, and a leaked `set()` makes every later connection handler exit instantly. Both failure modes are silent and cascade, so don't remove those fixtures.
+
+**The Admin GUI is single-threaded via qasync.** asyncio runs on top of Qt's event loop, so the GUI, the Engine socket and every background task share one thread — no cross-thread marshalling anywhere. QML calls synchronous slots; anything needing I/O schedules a task with `asyncio.ensure_future` and returns immediately. Don't introduce a socket thread: it would contradict the README's rule that threads are only for work that cannot signal readiness.
+
+**Admins heartbeat like clients.** Nothing else makes an Admin GUI send traffic, and the Engine reaps any peer silent past `HEARTBEAT_TIMEOUT` regardless of role. Removing that heartbeat task disconnects idle operators after 60 seconds.
 
 **Database conventions.** Timestamps are ISO-8601 UTC strings (fixed width, so `WHERE timestamp >= ?` compares chronologically). Network counters arrive cumulative since client boot, so summaries sum positive deltas and skip negatives — a negative delta is a reboot, not negative usage. Every dispatch gets its own `command_id` even in a broadcast. Writes are synchronous on the event loop by measurement, not by oversight; re-run `scripts/bench_database.py` before changing that.
 
