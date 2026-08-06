@@ -191,8 +191,11 @@ present but empty. No real logic in this phase.
 - [x] Policy editor: website blacklist/whitelist **with `mode` always explicit**
       and the whitelist tradeoff spelled out in the UI; app blacklist
       (blacklist-only by design)
-- [x] Script pre-send validation (`py_compile` in a subprocess, so the check
-      runs under the interpreter version the client will use)
+- [x] Script pre-send validation — syntax (`py_compile` in a subprocess, under
+      the interpreter version the client will use), **plus a stdlib-only import
+      policy read with `ast`** and a Windows-availability check resolved inside
+      the bundled runtime. Surfaced on a Check button as well as on send, and
+      lists accepted imports, not just rejected ones.
 - [x] Local prefs in QSettings — remembers the address that actually connected,
       not the one prefilled at startup
 - [x] Tests: **126 passing**, 30 of them new for the Admin GUI
@@ -277,10 +280,11 @@ present but empty. No real logic in this phase.
       unrestricted because the network went down
 
 ### Packaging
-- [ ] **Bundle pinned Python for script execution — blocked on
-      [issues.md](issues.md) A5.** Which distribution depends on whether your
-      scripts need third-party packages. Until then the agent falls back to the
-      running interpreter and logs a warning.
+- [ ] **Bundle the pinned embeddable Python for script execution.** No longer
+      blocked — scripts are stdlib + `subprocess` only, so the embeddable
+      distribution is sufficient and the import policy enforces it
+      ([issues.md](issues.md) B11). Until this is built the agent falls back to
+      the running interpreter and logs a warning.
 - [ ] Freeze the helper windows into **one** executable with a mode flag, so
       the Qt payload is paid for once rather than twice. Independent of A5 —
       an embeddable distribution could never carry PySide6 anyway.

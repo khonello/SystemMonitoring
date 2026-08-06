@@ -12,10 +12,15 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from admin_gui.backend import Backend, _flatten_report, _format_bytes
+from admin_gui.backend import Backend, _describe_check, _flatten_report, _format_bytes
 from admin_gui.connection import EngineConnection
 from admin_gui.models import ApplicationModel, ClientListModel
-from admin_gui.validation import validate_script
+from admin_gui.validation import (
+    analyse_script,
+    classify_imports,
+    extract_imports,
+    validate_script,
+)
 from common.constants import (
     MSG_TERMINATE_PROCESS,
     REPORT_APP_USAGE,
@@ -243,6 +248,195 @@ async def test_powershell_validation_does_not_execute():
     ok, _ = await validate_script("Remove-Item C:\\ -Recurse", SCRIPT_TYPE_POWERSHELL)
 
     assert ok  # balanced, so it parses - but nothing ran
+
+
+# ---------------------------------------------------------------------------
+# Import extraction
+# ---------------------------------------------------------------------------
+
+
+def test_extracts_plain_imports():
+    assert extract_imports("import os\nimport sys\n") == ["os", "sys"]
+
+
+def test_extracts_multiple_names_on_one_line():
+    """A regex over `^import (\\w+)` would catch only the first of these."""
+    assert extract_imports("import os, sys, json\n") == ["json", "os", "sys"]
+
+
+def test_extracts_from_imports_as_the_module():
+    assert extract_imports("from pathlib import Path\n") == ["pathlib"]
+
+
+def test_extracts_parenthesised_multiline_imports():
+    """The case a line-oriented regex gets most obviously wrong."""
+    script = "from os import (\n    path,\n    sep,\n)\n"
+
+    assert extract_imports(script) == ["os"]
+
+
+def test_extracts_dotted_imports():
+    assert extract_imports("import os.path\nfrom xml.etree import ElementTree\n") == [
+        "os.path", "xml.etree",
+    ]
+
+
+def test_ignores_imports_inside_strings_and_comments():
+    """The decisive advantage of parsing over pattern matching."""
+    script = (
+        '"""This docstring says import requests, which is not an import."""\n'
+        "# import numpy\n"
+        "message = 'import pandas'\n"
+        "import os\n"
+    )
+
+    assert extract_imports(script) == ["os"]
+
+
+def test_finds_imports_nested_in_functions():
+    """Deferred imports are still imports."""
+    script = "def work():\n    import subprocess\n    return subprocess\n"
+
+    assert extract_imports(script) == ["subprocess"]
+
+
+def test_skips_relative_imports():
+    """A script is a lone file with no package around it."""
+    assert extract_imports("from . import sibling\n") == []
+
+
+def test_extraction_raises_on_bad_syntax():
+    with pytest.raises(SyntaxError):
+        extract_imports("import \n")
+
+
+# ---------------------------------------------------------------------------
+# Import policy
+# ---------------------------------------------------------------------------
+
+
+def test_classifies_stdlib_third_party_and_posix():
+    result = classify_imports(["os", "requests", "fcntl", "json"])
+
+    assert result["stdlib"] == ["os", "json"]
+    assert result["third_party"] == ["requests"]
+    assert result["posix_only"] == ["fcntl"]
+
+
+def test_dotted_stdlib_is_classified_by_its_root():
+    assert classify_imports(["os.path"])["stdlib"] == ["os.path"]
+
+
+@pytest.mark.asyncio
+async def test_stdlib_only_script_passes():
+    result = await analyse_script(
+        "import os\nimport subprocess\nprint(os.getcwd())\n", SCRIPT_TYPE_PYTHON
+    )
+
+    assert result["ok"], result["errors"]
+    assert result["stdlib"] == ["os", "subprocess"]
+
+
+@pytest.mark.asyncio
+async def test_third_party_import_is_rejected():
+    result = await analyse_script("import requests\n", SCRIPT_TYPE_PYTHON)
+
+    assert not result["ok"]
+    assert result["third_party"] == ["requests"]
+    assert "no pip" in " ".join(result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_unix_only_import_is_rejected_with_an_explanation():
+    """The client is Windows; this compiles fine but could never run there."""
+    result = await analyse_script("import fcntl\n", SCRIPT_TYPE_PYTHON)
+
+    assert not result["ok"]
+    assert result["posix_only"] == ["fcntl"]
+
+    detail = " ".join(result["errors"])
+    assert "Unix-only" in detail
+    assert "msvcrt" in detail, "should point at the Windows alternative"
+
+
+@pytest.mark.asyncio
+async def test_unix_only_import_without_an_equivalent_still_explains():
+    result = await analyse_script("import pwd\n", SCRIPT_TYPE_PYTHON)
+
+    assert not result["ok"]
+    assert "Unix-only" in " ".join(result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_hidden_third_party_import_is_still_caught():
+    """Buried inside a function, past a docstring mentioning other modules."""
+    script = (
+        '"""Uses only os and sys."""\n'
+        "def go():\n"
+        "    import numpy\n"
+        "    return numpy\n"
+    )
+
+    result = await analyse_script(script, SCRIPT_TYPE_PYTHON)
+
+    assert not result["ok"]
+    assert result["third_party"] == ["numpy"]
+
+
+@pytest.mark.asyncio
+async def test_syntax_error_is_reported_before_import_analysis():
+    result = await analyse_script("import requests\nif True\n", SCRIPT_TYPE_PYTHON)
+
+    assert not result["ok"]
+    assert "SyntaxError" in result["errors"][0]
+
+
+@pytest.mark.asyncio
+async def test_script_with_no_imports_passes():
+    result = await analyse_script("print('hello')\n", SCRIPT_TYPE_PYTHON)
+
+    assert result["ok"]
+    assert result["stdlib"] == []
+
+
+@pytest.mark.asyncio
+async def test_powershell_skips_the_import_policy():
+    """The policy is about Python's runtime; PowerShell ships with Windows."""
+    result = await analyse_script("Get-Process | Stop-Process", SCRIPT_TYPE_POWERSHELL)
+
+    assert result["ok"]
+
+
+@pytest.mark.asyncio
+async def test_development_fallback_is_flagged_as_a_warning():
+    """Validating against the wrong interpreter is a caveat, not a silent
+    assumption."""
+    result = await analyse_script("import os\n", SCRIPT_TYPE_PYTHON)
+
+    if not result["bundled"]:
+        assert any("bundled runtime" in w for w in result["warnings"])
+
+
+def test_check_summary_lists_accepted_imports():
+    """Showing what passed teaches the rule; a bare OK does not."""
+    summary = _describe_check({
+        "ok": True, "errors": [], "warnings": [],
+        "stdlib": ["os", "json"], "third_party": [], "posix_only": [],
+        "unavailable": [], "bundled": True,
+    })
+
+    assert "os" in summary and "json" in summary
+
+
+def test_check_summary_reports_failures():
+    summary = _describe_check({
+        "ok": False, "errors": ["Third-party imports are not allowed: requests"],
+        "warnings": [], "stdlib": ["os"], "third_party": ["requests"],
+        "posix_only": [], "unavailable": [], "bundled": True,
+    })
+
+    assert "requests" in summary
+    assert "Allowed: os" in summary
 
 
 # ---------------------------------------------------------------------------

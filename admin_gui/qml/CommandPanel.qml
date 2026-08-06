@@ -47,11 +47,20 @@ Item {
                 valueFromText: function (text) { return parseInt(text) || 300 }
             }
 
+            // Checking without sending lets an operator learn the policy
+            // before committing, rather than only being told off on send.
+            Button {
+                text: "Check"
+                enabled: scriptInput.text.trim().length > 0
+                onClicked: backend.checkScript(scriptInput.text, scriptType.currentText)
+            }
+
             Button {
                 text: "Run script"
                 enabled: root.ready && scriptInput.text.trim().length > 0
                 // Validated locally before it is sent; a script that will not
-                // compile never reaches a lab machine.
+                // compile, or that breaks the stdlib-only policy, never
+                // reaches a lab machine.
                 onClicked: backend.sendScript(
                     scriptInput.text, scriptType.currentText, scriptTimeout.value)
             }
@@ -112,6 +121,71 @@ Item {
             }
         }
 
+        // Validation result. Always visible once a check has run, pass or
+        // fail — seeing which imports were accepted teaches the rule, where a
+        // silent success teaches nothing.
+        Rectangle {
+            id: checkResult
+
+            property string detail: ""
+            property bool passed: true
+
+            Layout.fillWidth: true
+            visible: detail !== ""
+            implicitHeight: visible ? checkText.implicitHeight + 16 : 0
+            radius: 4
+            color: passed ? "#12261a" : "#2b1416"
+            border.width: 1
+            border.color: passed ? "#2e6b45" : "#8b3a3f"
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 8
+
+                Label {
+                    text: checkResult.passed ? "✓" : "✕"
+                    color: checkResult.passed ? "#4fbf7b" : "#f0736f"
+                    font.pixelSize: 14
+                    font.bold: true
+                    Layout.alignment: Qt.AlignTop
+                }
+
+                Label {
+                    id: checkText
+                    Layout.fillWidth: true
+                    text: checkResult.detail
+                    color: checkResult.passed ? "#9fd8b6" : "#f0a9a6"
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                }
+
+                Label {
+                    text: "✕"
+                    color: "#6e7681"
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignTop
+
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.margins: -4
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: checkResult.detail = ""
+                    }
+                }
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: "Python scripts: standard library only, and only modules "
+                  + "available on Windows. No third-party packages - the "
+                  + "client's runtime has no pip."
+            color: "#6e7681"
+            font.pixelSize: 10
+            wrapMode: Text.Wrap
+        }
+
         RowLayout {
             Layout.fillWidth: true
 
@@ -154,6 +228,11 @@ Item {
 
         function onCommandFinished(commandId, status, message) {
             outputView.append("--- " + commandId + ": " + status + " " + message)
+        }
+
+        function onScriptChecked(summary, passed) {
+            checkResult.detail = summary
+            checkResult.passed = passed
         }
     }
 }

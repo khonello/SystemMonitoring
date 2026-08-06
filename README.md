@@ -547,7 +547,21 @@ Predefined scripts are restricted to two types: **Python** and **PowerShell**. P
 - **Admin GUI**: uses its bundled interpreter to validate a script *before* it is ever sent to a client — at minimum a syntax check (`python -m py_compile`), catching authoring mistakes at the source instead of discovering them on lab machines.
 - **Client Agent**: uses its own bundled interpreter both to re-validate the script on arrival (in case of tampering or corruption in transit/storage) and to actually execute it.
 - **Version pinning**: both bundles must be built from the same pinned Python version as part of the release process — if the GUI validates against one version and the client executes on another, a "validated" script can still fail at runtime.
-- **Distribution choice**: an embeddable Python distribution (small, stdlib-only, no pip) is the default; if scripts need third-party packages beyond stdlib, a fuller frozen interpreter (e.g. PyInstaller-style bundling) would be needed instead — to be decided based on actual script requirements.
+- **Distribution choice**: **decided — the embeddable distribution.** Predefined scripts are standard library and `subprocess` only, so the small stdlib-only build with no pip is sufficient, and that constraint is now enforced rather than trusted. (The dialog and overlay executables are a separate matter: they carry their own Qt and are frozen with PyInstaller, which is unaffected by this choice.)
+
+### Script Import Policy
+
+Because the client's runtime has no pip and nothing installed beyond the standard library, a script that imports anything else cannot run there. Rather than letting that fail on a lab machine, the Admin GUI rejects it before sending. Three rules:
+
+1. **Standard library only.** Any import outside `sys.stdlib_module_names` is refused.
+2. **Windows-available only.** Around fifteen stdlib modules wrap POSIX facilities and do not exist on Windows — `fcntl`, `pwd`, `grp`, `termios`, `pty`, `resource`, `curses` and friends. These compile cleanly on any machine and fail only at runtime on the client, which is exactly the class of mistake this check exists to prevent. The operator is told which Windows facility to use instead where one exists (`msvcrt.locking` for `fcntl`, and so on).
+3. **Present in the actual runtime.** The imports are resolved inside the *bundled* interpreter with `importlib.util.find_spec`, so anything the embeddable distribution omits is caught too. `find_spec` resolves without importing — importing would execute the module's top-level code, which a validation step must never do.
+
+**Imports are read with `ast`, not a regular expression.** A pattern match cannot distinguish `import os` from the same words inside a docstring, and mishandles `import os, sys` and parenthesised multi-line `from` imports. The parser is already needed for the syntax check, so using it costs nothing and cannot be fooled — including by imports deferred inside a function body.
+
+**Known limit**: this is static analysis of import statements. It cannot catch runtime-only platform assumptions — `os.fork()`, `signal.SIGKILL`, POSIX-shaped paths — which are valid Python that simply fails on Windows. The check narrows the failure surface; it does not eliminate it.
+
+The result is surfaced in the Admin GUI, on a **Check** button as well as on send, and it lists the imports it *accepted* as well as those it rejected — an operator who can see the policy agree with them learns the rule, where a bare "OK" teaches nothing.
 
 ### Script Execution Model
 

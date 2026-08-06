@@ -28,7 +28,7 @@ from admin_gui.models import (
     ReportModel,
     UsbEventModel,
 )
-from admin_gui.validation import validate_script
+from admin_gui.validation import analyse_script
 from common.constants import (
     DEFAULT_SCRIPT_TIMEOUT,
     MAX_SCRIPT_TIMEOUT,
@@ -73,6 +73,7 @@ class Backend(QObject):
     validationFailed = Signal(str)
     reportReady = Signal(str)                 # report kind
     pauseExpiring = Signal(str, int)          # client_id, seconds remaining
+    scriptChecked = Signal(str, bool)         # human-readable summary, passed
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -202,15 +203,29 @@ class Backend(QObject):
     def sendScript(self, script: str, script_type: str, timeout: int) -> None:
         asyncio.ensure_future(self._send_script(script, script_type, timeout))
 
+    @Slot(str, str)
+    def checkScript(self, script: str, script_type: str) -> None:
+        """Analyse a script without sending it, so the operator can see what
+        the policy makes of it before committing."""
+        asyncio.ensure_future(self._check_script(script, script_type))
+
+    async def _check_script(self, script: str, script_type: str) -> dict[str, Any]:
+        result = await analyse_script(script, script_type)
+        self.scriptChecked.emit(_describe_check(result), result["ok"])
+        return result
+
     async def _send_script(
         self, script: str, script_type: str, timeout: int = DEFAULT_SCRIPT_TIMEOUT
     ) -> None:
         """Validate locally, then dispatch. Never send a script that will not
-        compile — that is the entire reason this GUI ships an interpreter."""
-        ok, message = await validate_script(script, script_type)
-        if not ok:
-            logger.warning("Script rejected before sending: %s", message)
-            self.validationFailed.emit(message)
+        compile or that breaks the stdlib-only policy — that is the entire
+        reason this GUI ships an interpreter."""
+        result = await self._check_script(script, script_type)
+
+        if not result["ok"]:
+            detail = "\n".join(result["errors"])
+            logger.warning("Script rejected before sending: %s", detail)
+            self.validationFailed.emit(detail)
             self._set_status("Script failed validation - not sent")
             return
 
@@ -519,6 +534,33 @@ class Backend(QObject):
         if state != self._connected:
             self._connected = state
             self.connectionStateChanged.emit(state)
+
+
+def _describe_check(result: dict[str, Any]) -> str:
+    """Turn a validation result into something worth reading.
+
+    Shows the accepted imports as well as the rejected ones — an operator who
+    can see the policy agreed with them learns the rule, whereas a bare "OK"
+    teaches nothing.
+    """
+    lines: list[str] = []
+
+    if result["ok"]:
+        if result["stdlib"]:
+            lines.append(
+                f"OK - {len(result['stdlib'])} stdlib import(s): "
+                + ", ".join(result["stdlib"])
+            )
+        else:
+            lines.append("OK - no imports")
+    else:
+        lines.extend(result["errors"])
+
+        if result["stdlib"]:
+            lines.append("Allowed: " + ", ".join(result["stdlib"]))
+
+    lines.extend(result["warnings"])
+    return "\n".join(lines)
 
 
 def _parse_iso(value: str) -> datetime | None:

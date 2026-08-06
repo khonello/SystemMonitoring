@@ -13,10 +13,9 @@ resolved by writing code. Sections B and C are engineering work.
 Phases 0–4 are complete apart from packaging. Resolved items stay in section B
 rather than being deleted, so the reasoning behind each decision survives.
 
-**Currently blocking:** nothing, strictly. A5 has been answered in substance;
-one detail remains (are your scripts stdlib-only?) and closing it unblocks
-packaging via C2. Everything else in section A is policy you can settle at any
-point before deployment.
+**Currently blocking: nothing.** A5 is fully answered (see B11) and packaging
+is unblocked — what remains there is build work, not a decision. Everything
+left in section A is policy you can settle at any point before deployment.
 
 ---
 
@@ -76,23 +75,7 @@ that is in scope depends on how you intend to present and deploy the project.
 Default if you do nothing: it stays out of scope, and the limitation is
 documented rather than fixed.
 
-### A5. What do your predefined scripts need? — **ANSWERED, one detail left**
-
-Answered: scripts are an *extension mechanism* for small routine tasks not
-built into the client's features by default. That settles the shape of the
-problem and produced the execution cap (see B9).
-
-**The remaining detail**: "small routine tasks" is consistent with
-standard-library-only, which would make the small embeddable distribution
-viable. But it is not proof — a routine task might still reach for `requests`
-to call an internal API, or `psutil` for something the agent does not already
-report.
-
-If you can confirm your scripts are stdlib + `subprocess` + PowerShell only,
-C2 closes and packaging can proceed on the embeddable distribution. If even one
-needs a third-party package, the script-execution runtime needs a fuller frozen
-interpreter instead. Either way this is now a small question, not an open-ended
-one — and it is reversible, since only the script runtime is affected.
+*(A5 is answered and has moved to [B11](#b11-script-import-policy--done).)*
 
 ### A6. Admins authenticate as if they were clients — is that what you want?
 
@@ -193,6 +176,43 @@ Phase 4 monitors.
 The Deployment section now says `pip install PySide6 qasync` and uses
 `python -m admin_gui.main`.
 
+### B11. Script import policy — **DONE** (this was A5)
+
+Answered: predefined scripts are standard library and `subprocess` only, no
+third-party packages. That closes the packaging question — the embeddable
+distribution is sufficient — and the constraint is now enforced rather than
+trusted, because a rule nobody checks is a rule that gets broken by accident.
+
+**Imports are read with `ast`, not a regex.** That was considered and rejected:
+a pattern match cannot tell `import os` from the same words inside a docstring,
+and it mishandles `import os, sys` and parenthesised multi-line `from` imports.
+The parser is already needed for the syntax check, so it costs nothing and
+cannot be fooled — including by an import deferred inside a function body,
+which is the obvious way to sneak one past a line-oriented check.
+
+**The Windows question needed two mechanisms, not one:**
+
+- A **denylist** of the ~15 POSIX-only stdlib modules (`fcntl`, `pwd`, `grp`,
+  `termios`, `pty`, `resource`, `curses`, …). These are the dangerous ones:
+  they compile cleanly anywhere and fail only at runtime on the client. The
+  list exists so the operator gets "`fcntl` is Unix-only, use `msvcrt.locking`"
+  rather than a bare "not found".
+- `importlib.util.find_spec` run **inside the bundled interpreter**, which is
+  authoritative: it reflects the client's real module set, including anything
+  the embeddable distribution omits. `find_spec` resolves without importing —
+  importing would execute the module's top-level code, which a validation step
+  must never do.
+
+**Known limit, worth stating plainly**: this is static analysis of import
+statements. It cannot catch runtime-only platform assumptions — `os.fork()`,
+`signal.SIGKILL`, POSIX path shapes — which are valid Python that simply fails
+on Windows. It narrows the failure surface rather than eliminating it. If that
+turns out to matter in practice, the next step is running each script once
+against a real client during authoring, not more static rules.
+
+Surfaced in the GUI via a **Check** button as well as on send, listing accepted
+imports alongside rejected ones.
+
 ### B9. Scripts could run forever — **DONE**
 
 The README's Script Execution Model was built around "some scripts run
@@ -271,9 +291,13 @@ an admin, and issue commands.
 
 **Run it only on an isolated or trusted network until Phase 6.**
 
-### C2. Bundled Python distribution choice undecided — *blocks Phase 4 packaging*
+### C2. Bundled Python packaging — *unblocked, still to be built*
 
-Waiting on A5. This is now the **only** thing left in Phase 4.
+**No longer waiting on a decision.** A5 is answered (B11): scripts are stdlib
+and `subprocess` only, so the **embeddable distribution** is sufficient for the
+script-execution runtime, and the import policy now enforces that.
+
+What remains is the build work itself, not a choice:
 
 Three fallbacks are live because the bundle does not exist yet, each logging a
 warning: `admin_gui/validation.py` and `client/executor.py` both fall back to
