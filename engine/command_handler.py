@@ -1,12 +1,15 @@
 """Inbound message dispatch and outbound command routing.
 
-PHASE 1 SCAFFOLD. Every handler exists and is wired into `process_message`'s
-dispatch table, but the monitoring handlers only log — persistence lands in
-Phase 2, where each `# TODO(Phase 2)` becomes a call into engine.database.
+Handlers persist through engine.database, which owns every SQL statement in
+the project.
 
-Routing itself (admin -> client, and the broadcast fan-out) is implemented
-rather than stubbed: it is plumbing, and the Phase 1 exit criteria require a
-command to actually reach a client.
+Those calls are synchronous and run directly on the event loop. That is a
+measured decision, not an assumption: scripts/bench_database.py puts writes at
+5-8ms each, which across 50 clients on their real collection intervals leaves
+the loop blocked ~35ms per second — a 3.5% duty cycle. A thread would add
+complexity for no gain at that level. If client count or collection frequency
+grows, re-run the benchmark and wrap these calls in asyncio.to_thread;
+database.py itself needs no change either way.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from common.constants import (
 )
 from common.protocol import create_message, get_payload
 from common.utils import new_command_id
-from engine import connection_manager
+from engine import connection_manager, database
 from engine.protocol import write_message
 
 logger = logging.getLogger(__name__)
@@ -44,15 +47,16 @@ logger = logging.getLogger(__name__)
 
 async def handle_heartbeat(peer_id: str, payload: dict[str, Any]) -> None:
     """Record liveness. `touch` already ran in the read loop."""
-    connection_manager.set_status(peer_id, payload.get("status", "active"))
+    status = payload.get("status", "active")
+    connection_manager.set_status(peer_id, status)
     logger.debug("Heartbeat from %s (idle=%ss)", peer_id, payload.get("idle_time"))
-    # TODO(Phase 2): database.update_client_last_seen(peer_id)
+    database.update_client_last_seen(peer_id, status)
 
 
 async def handle_app_data(peer_id: str, payload: dict[str, Any]) -> None:
     apps = payload.get("applications", [])
-    logger.info("APP_DATA from %s: %d applications", peer_id, len(apps))
-    # TODO(Phase 2): database.store_app_data(peer_id, apps)
+    stored = database.store_app_data(peer_id, apps)
+    logger.info("APP_DATA from %s: %d applications stored", peer_id, stored)
 
 
 async def handle_network_data(peer_id: str, payload: dict[str, Any]) -> None:
@@ -62,7 +66,7 @@ async def handle_network_data(peer_id: str, payload: dict[str, Any]) -> None:
         payload.get("bytes_sent"),
         payload.get("bytes_received"),
     )
-    # TODO(Phase 2): database.store_network_data(peer_id, payload)
+    database.store_network_data(peer_id, payload)
 
 
 async def handle_usb_event(peer_id: str, payload: dict[str, Any]) -> None:
@@ -72,7 +76,7 @@ async def handle_usb_event(peer_id: str, payload: dict[str, Any]) -> None:
         payload.get("event"),
         payload.get("device_name"),
     )
-    # TODO(Phase 2): database.store_usb_event(peer_id, payload)
+    database.store_usb_event(peer_id, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -81,18 +85,23 @@ async def handle_usb_event(peer_id: str, payload: dict[str, Any]) -> None:
 
 
 async def handle_command_response(peer_id: str, payload: dict[str, Any]) -> None:
-    logger.info(
-        "COMMAND_RESPONSE from %s for %s: %s",
-        peer_id,
-        payload.get("command_id"),
-        payload.get("status"),
-    )
-    # TODO(Phase 2): database.update_command_status(...)
+    command_id = payload.get("command_id")
+    status = payload.get("status")
+    logger.info("COMMAND_RESPONSE from %s for %s: %s", peer_id, command_id, status)
+
+    if command_id:
+        database.update_command_status(command_id, str(status))
+
     await _relay_to_admins(MSG_COMMAND_RESPONSE, peer_id, payload)
 
 
 async def handle_command_accepted(peer_id: str, payload: dict[str, Any]) -> None:
-    logger.info("Script %s accepted by %s", payload.get("command_id"), peer_id)
+    command_id = payload.get("command_id")
+    logger.info("Script %s accepted by %s", command_id, peer_id)
+
+    if command_id:
+        database.update_command_status(command_id, "running")
+
     await _relay_to_admins(MSG_COMMAND_ACCEPTED, peer_id, payload)
 
 
@@ -104,13 +113,14 @@ async def handle_command_output(peer_id: str, payload: dict[str, Any]) -> None:
 
 
 async def handle_command_complete(peer_id: str, payload: dict[str, Any]) -> None:
+    command_id = payload.get("command_id")
     logger.info(
-        "Script %s finished on %s: rc=%s",
-        payload.get("command_id"),
-        peer_id,
-        payload.get("returncode"),
+        "Script %s finished on %s: rc=%s", command_id, peer_id, payload.get("returncode")
     )
-    # TODO(Phase 2): database.update_command_status(...)
+
+    if command_id:
+        database.update_command_status(command_id, str(payload.get("status", "complete")))
+
     await _relay_to_admins(MSG_COMMAND_COMPLETE, peer_id, payload)
 
 
@@ -143,15 +153,26 @@ async def handle_admin_command(peer_id: str, payload: dict[str, Any]) -> None:
         )
         return
 
-    command_id = payload.get("command_id") or new_command_id()
-
     if not targets:
-        delivered = await broadcast_command(command_type, parameters, command_id)
-        logger.info("Broadcast %s as %s to %d clients", command_type, command_id, delivered)
+        delivered = await broadcast_command(command_type, parameters, admin_id=peer_id)
+        logger.info("Broadcast %s to %d clients", command_type, delivered)
         return
 
+    # An admin-supplied command_id is honoured only for a single target. Across
+    # several it would name more than one execution, so each gets its own.
+    supplied_id = payload.get("command_id")
+    if supplied_id and len(targets) > 1:
+        logger.warning(
+            "Ignoring supplied command_id %r: %d targets, each needs its own",
+            supplied_id,
+            len(targets),
+        )
+        supplied_id = None
+
     for client_id in targets:
-        await send_command_to_client(client_id, command_type, parameters, command_id)
+        await send_command_to_client(
+            client_id, command_type, parameters, supplied_id, admin_id=peer_id
+        )
 
 
 async def handle_client_list_request(peer_id: str, payload: dict[str, Any]) -> None:
@@ -172,32 +193,48 @@ async def send_command_to_client(
     command_type: str,
     parameters: dict[str, Any],
     command_id: str | None = None,
+    admin_id: str | None = None,
 ) -> bool:
-    """Send one command to one client. Returns False if it is not connected."""
+    """Send one command to one client. Returns False if it is not connected.
+
+    The command is recorded before dispatch, so an attempt that fails mid-write
+    still leaves an audit trail rather than vanishing.
+    """
+    resolved_id = command_id or new_command_id()
+
+    database.log_command(admin_id, client_id, resolved_id, command_type, parameters)
+
     writer = connection_manager.get_writer(client_id)
     if writer is None:
         logger.error("Cannot send %s: client %s not connected", command_type, client_id)
+        database.update_command_status(resolved_id, "undeliverable")
         return False
 
     command = create_message(
         command_type,
         parameters,
         client_id=client_id,
-        command_id=command_id or new_command_id(),
+        command_id=resolved_id,
     )
-    # TODO(Phase 2): database.log_command(...) before dispatch
     return await write_message(writer, command)
 
 
 async def broadcast_command(
     command_type: str,
     parameters: dict[str, Any],
-    command_id: str | None = None,
+    admin_id: str | None = None,
 ) -> int:
-    """Send one command to every connected client. Returns the delivered count."""
+    """Send one command to every connected client. Returns the delivered count.
+
+    Each client gets its own command_id, deliberately: a shared id would put
+    duplicate rows in command_log, make update_command_status hit all of them
+    at once, and leave TERMINATE_SCRIPT unable to name one execution.
+    """
     delivered = 0
     for client_id in connection_manager.get_client_ids():
-        if await send_command_to_client(client_id, command_type, parameters, command_id):
+        if await send_command_to_client(
+            client_id, command_type, parameters, admin_id=admin_id
+        ):
             delivered += 1
     return delivered
 

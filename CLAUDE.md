@@ -4,27 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**No code exists yet.** The repository contains only `README.md` — a complete design specification for a final-year project (system monitoring/management tool for a computer lab). The README includes full reference implementations of `engine/main.py`, `client/main.py`, and `engine/database.py` as fenced code blocks; treat those as the intended starting point when scaffolding, not as existing files.
+`todo.md` at the repo root is the live tracker — read it first. Phases 0–2 are complete: all three components are scaffolded, and the Engine is fully implemented and tested. The Client Agent's monitors and executor are still deliberate stubs (Phase 4), and the Admin GUI has no transport (Phase 3).
 
-When implementing, follow the directory layout in the README's "Project Structure" section (`engine/`, `client/`, `admin_gui/`, `common/`, `tests/`).
+`README.md` is the design specification, including reference implementations as fenced code blocks. Where the working code and the README disagree, the code is newer — the deviations and their reasons are recorded in `todo.md`.
 
 ## Commands
 
-These come from the README's Deployment section and describe the intended layout; nothing is runnable yet.
-
-```bash
-pip install -r requirements.txt
-python engine/setup_db.py          # initialize SQLite schema
-python engine/main.py              # Engine — Linux only
-```
+Run everything through the venv. The project is installed editable, which is what makes `from common.protocol import ...` resolve from every entry point.
 
 ```powershell
-python client\main.py                             # Client Agent, manual/testing run
-python client\install_service.py --startup=auto   # install as Windows service
-python admin_gui\main.py                          # Administrator GUI
+.\.venv\Scripts\python.exe -m pytest -q                    # 96 tests
+.\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common
+.\.venv\Scripts\python.exe -m scripts.bench_database       # SQLite write cost
+.\.venv\Scripts\python.exe -m client.main                  # Client Agent
+.\.venv\Scripts\python.exe -m admin_gui.main               # Administrator GUI
 ```
 
-Tests use `pytest` with `pytest-asyncio` (`@pytest.mark.asyncio` for async tests). Target >70% coverage.
+**The Engine runs under WSL**, not Windows — it is Linux-only by design (asyncio/epoll). It imports only the standard library, so WSL needs no venv:
+
+```bash
+wsl -- bash -lc "cd /mnt/c/.../SystemMonitoring && python3 -m engine.main"
+```
+
+WSL2 localhost forwarding means the Windows client reaches it at `127.0.0.1:5000` unchanged. `ENGINE_LOG_LEVEL=DEBUG` surfaces heartbeats; `DEV_BYPASS_AUTH=1` skips the handshake.
+
+Tests use `pytest-asyncio` in strict mode — async tests need an explicit `@pytest.mark.asyncio`.
 
 ## Architecture
 
@@ -49,6 +53,10 @@ Wire protocol is newline-delimited JSON over TCP, UTF-8. Every message has `type
 **Authentication is built last but is not optional.** Per-client keys are derived as `HMAC(master_secret, client_id)`; the handshake is nonce/challenge based. The build order defers real crypto until after all three components are integrated — but the *message shape* is scaffolded from the start, so `REGISTER` carries nonce/response fields with a stubbed always-accept check. Do not change the protocol later to add auth; fill in the existing stub.
 
 `DEV_BYPASS_AUTH` must skip the handshake **entirely** with an early return before any nonce is sent — deliberately not a validation step that quietly passes, so a forgotten flag is visible in a packet capture. Defaults to off, logs loudly when on.
+
+**Two module globals need resetting between tests, and `tests/conftest.py` does it autouse.** `engine.database` holds its path and connection globally — without isolation, any test touching the Engine writes to the real `monitoring.db` in the repo root. `engine.main._shutdown` is an `asyncio.Event` created lazily per loop; `Event.wait()` binds to the first loop that awaits it and raises `RuntimeError` from any other, and a leaked `set()` makes every later connection handler exit instantly. Both failure modes are silent and cascade, so don't remove those fixtures.
+
+**Database conventions.** Timestamps are ISO-8601 UTC strings (fixed width, so `WHERE timestamp >= ?` compares chronologically). Network counters arrive cumulative since client boot, so summaries sum positive deltas and skip negatives — a negative delta is a reboot, not negative usage. Every dispatch gets its own `command_id` even in a broadcast. Writes are synchronous on the event loop by measurement, not by oversight; re-run `scripts/bench_database.py` before changing that.
 
 **Access-control asymmetry is intentional.** Application management is *blacklist-only* (whitelisting can't reliably enumerate OS/helper processes, so unlisted apps are allowed by design). Website filtering supports *both* modes via a required `mode` field, with blacklist as the default and whitelist reserved for locked-down sessions like exams. Don't "fix" this into symmetry.
 

@@ -105,22 +105,54 @@ present but empty. No real logic in this phase.
 
 ---
 
-## Phase 2 — Engine (full implementation, tested before Phase 3 starts)
+## Phase 2 — Engine (full implementation) ✅
 
-- [ ] Connection registry + heartbeat-timeout reaping of dead clients
-- [ ] `database.py` real implementations: `store_client`, `update_client_last_seen`,
-      `store_app_data`, `store_network_data`, `store_usb_event`,
-      `get_client_apps`, `get_network_summary`
-- [ ] All SQL confined to `database.py` (keeps the documented Postgres path open)
-- [ ] Command routing admin → specific client, and `broadcast_command`
-- [ ] `command_log` persistence + status updates
-- [ ] Script lifecycle relay: `COMMAND_ACCEPTED` / `COMMAND_OUTPUT` /
-      `COMMAND_COMPLETE` forwarded to the admin
-- [ ] Data aggregation: 24-hour summaries, weekly rollups
-- [ ] Decide whether SQLite writes need `run_in_executor` under load — measure,
-      don't assume (README "Concurrency Model")
-- [ ] Unit + integration tests, >70% coverage
-- [ ] **Gate: Engine fully tested standalone before Admin work begins**
+- [x] Connection registry + heartbeat-timeout reaping of dead clients
+- [x] `database.py` real implementations: `store_client`,
+      `update_client_last_seen`, `mark_client_offline`, `store_app_data`,
+      `store_network_data`, `store_usb_event`, `get_client_apps`,
+      `get_network_summary`, `get_usb_events`, `get_all_clients`
+- [x] All SQL confined to `database.py` (keeps the documented Postgres path open)
+- [x] Command routing admin → specific client, and `broadcast_command`
+- [x] `command_log` persistence + status updates, including an `undeliverable`
+      row when the target client is not connected
+- [x] Script lifecycle relay: `COMMAND_ACCEPTED` / `COMMAND_OUTPUT` /
+      `COMMAND_COMPLETE` forwarded to admins
+- [x] Data aggregation: `get_network_summary` (24h), `get_weekly_network_summary`
+      (per-day), `get_app_usage_summary`
+- [x] **Measured** the `run_in_executor` question — see below
+- [x] Unit + integration tests: **96 passing, 87% coverage** on engine+common
+      (target was >70%)
+
+**Decisions made during Phase 2, worth remembering:**
+
+- **Writes stay synchronous on the event loop.** `scripts/bench_database.py`
+  measures 5–8ms per write, ~35ms blocked per second across 50 clients — a
+  3.5% duty cycle. Re-run that benchmark before revisiting; the fix if it ever
+  changes is `asyncio.to_thread` at the call sites in `command_handler.py`,
+  not a change to `database.py`.
+- **One long-lived connection, not one per call.** Opening and closing per call
+  cost ~11–15ms; reusing it roughly halved that. `PRAGMA synchronous = NORMAL`
+  trades an fsync per commit for possibly losing the newest samples on power
+  loss — right for telemetry, and it cannot corrupt the database.
+- **Network counters are differenced at query time.** Clients send cumulative
+  since-boot counters, so summaries sum positive deltas and skip negatives,
+  which are reboots rather than negative usage.
+- **Each dispatch gets its own `command_id`**, even in a broadcast. A shared id
+  would duplicate audit rows, make one status update hit all of them, and leave
+  `TERMINATE_SCRIPT` unable to name a single execution.
+- **Timestamps are ISO-8601 UTC strings.** Fixed width, so lexicographic
+  comparison is chronological and `WHERE timestamp >= ?` works directly.
+
+**Open item carried forward:**
+
+- [ ] **Retention is not scheduled.** `database.prune_older_than(days)` exists
+      and is tested, but nothing calls it. `app_logs` grows fast — ~80 processes
+      every 30s is roughly 230k rows/day/client, so 50 clients produce on the
+      order of 11M rows/day. Retention period and schedule are a deployment
+      decision, so this needs an explicit call before any long-running install.
+
+- [x] **Gate: Engine fully tested standalone before Admin work begins**
 
 ---
 
