@@ -8,20 +8,24 @@ and would only prove Qt works.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
 
-from admin_gui.backend import Backend, _describe_check, _flatten_report, _format_bytes
-from admin_gui.connection import EngineConnection
-from admin_gui.models import ApplicationModel, ClientListModel
-from admin_gui.validation import (
+from admin.backend import Backend, _describe_check, _flatten_report, _format_bytes
+from admin.connection import EngineConnection
+from admin.models import ApplicationModel, ClientListModel
+from admin.validation import (
     analyse_script,
     classify_imports,
     extract_imports,
     validate_script,
 )
 from common.constants import (
+    MAX_BLOCK_HOURS,
+    MSG_SET_APP_BLACKLIST,
+    MSG_SET_TIME_RESTRICTION,
     MSG_TERMINATE_PROCESS,
     REPORT_APP_USAGE,
     REPORT_NETWORK_24H,
@@ -561,4 +565,193 @@ def test_commands_require_a_selected_client():
 
     backend.terminateProcess("chrome.exe", False)
 
+    assert "Select a client" in backend.status
+
+
+# ---------------------------------------------------------------------------
+# Time restrictions
+# ---------------------------------------------------------------------------
+#
+# A scheduled block, distinct from a pause: it has a known end and the student
+# sees it counting down. These test what goes on the wire; the enforcement it
+# drives is covered in test_client.py.
+
+
+class _RecordingConnection:
+    """Stands in for EngineConnection, capturing commands instead of sending."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, list[str], dict]] = []
+
+    async def send_command(self, command_type, target_clients, parameters=None):
+        self.sent.append((command_type, list(target_clients), parameters or {}))
+        return True
+
+
+def _backend_with_connection(selected: str = "pc-01", rows=None) -> tuple:
+    backend = Backend()
+    connection = _RecordingConnection()
+    backend._connection = connection
+    if rows is not None:
+        backend.clients.setRows(rows)
+    backend.selectedClient = selected
+    return backend, connection
+
+
+async def _settle() -> None:
+    """Let the task an ensure_future slot scheduled actually run."""
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_time_restriction_sends_a_start_and_an_end():
+    backend, connection = _backend_with_connection()
+
+    backend.setTimeRestriction(60, 0, False)
+    await _settle()
+
+    command_type, targets, parameters = connection.sent[0]
+    start = datetime.fromisoformat(parameters["start"])
+    end = datetime.fromisoformat(parameters["end"])
+
+    assert command_type == MSG_SET_TIME_RESTRICTION
+    assert targets == ["pc-01"]
+    assert end - start == timedelta(minutes=60)
+
+
+@pytest.mark.asyncio
+async def test_a_delayed_block_starts_in_the_future():
+    """Set up an exam lockout beforehand; the client's watchdog opens it."""
+    backend, connection = _backend_with_connection()
+
+    backend.setTimeRestriction(30, 15, False)
+    await _settle()
+
+    start = datetime.fromisoformat(connection.sent[0][2]["start"])
+
+    assert start > datetime.now(timezone.utc) + timedelta(minutes=14)
+
+
+@pytest.mark.asyncio
+async def test_an_over_long_block_warns_that_the_client_will_shorten_it():
+    """The cap is the client's, so this warns rather than silently clamping."""
+    backend, connection = _backend_with_connection()
+
+    backend.setTimeRestriction(MAX_BLOCK_HOURS * 60 + 30, 0, False)
+    await _settle()
+
+    assert connection.sent, "the command is still sent; the client applies the cap"
+    assert "shorten" in backend.status
+
+
+@pytest.mark.asyncio
+async def test_blocking_the_room_targets_only_connected_clients():
+    backend, connection = _backend_with_connection(
+        rows=[
+            {"client_id": "pc-01", "connected": True},
+            {"client_id": "pc-02", "connected": False},
+            {"client_id": "pc-03", "connected": True},
+        ],
+    )
+
+    backend.setTimeRestriction(45, 0, True)
+    await _settle()
+
+    assert connection.sent[0][1] == ["pc-01", "pc-03"]
+
+
+@pytest.mark.asyncio
+async def test_blocking_the_room_with_nobody_connected_sends_nothing():
+    backend, connection = _backend_with_connection(rows=[])
+
+    backend.setTimeRestriction(45, 0, True)
+    await _settle()
+
+    assert connection.sent == []
+    assert "No connected clients" in backend.status
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_restriction_sends_the_clear_flag():
+    backend, connection = _backend_with_connection()
+
+    backend.clearTimeRestriction(False)
+    await _settle()
+
+    assert connection.sent[0][2] == {"clear": True}
+
+
+@pytest.mark.asyncio
+async def test_a_time_restriction_requires_a_selected_client():
+    backend, connection = _backend_with_connection(selected="")
+
+    backend.setTimeRestriction(60, 0, False)
+    await _settle()
+
+    assert connection.sent == []
+    assert "Select a client" in backend.status
+
+
+def test_the_cap_shown_in_the_gui_is_the_one_the_client_enforces():
+    """Two copies of this number would drift; the GUI reads the shared one."""
+    from client import lockout
+
+    assert Backend().maxBlockHours == lockout.MAX_BLOCK_HOURS
+
+
+# ---------------------------------------------------------------------------
+# Application blacklist
+# ---------------------------------------------------------------------------
+#
+# The standing list, distinct from terminateProcess which kills one process
+# once. Both live in the policy panel and both are wanted.
+
+
+@pytest.mark.asyncio
+async def test_the_app_blacklist_is_sent_as_process_names():
+    """The payload key has to match what client.policy.set_app_blacklist reads."""
+    backend, connection = _backend_with_connection()
+
+    backend.setAppBlacklist("steam.exe\ndiscord.exe")
+    await _settle()
+
+    command_type, targets, parameters = connection.sent[0]
+
+    assert command_type == MSG_SET_APP_BLACKLIST
+    assert targets == ["pc-01"]
+    assert parameters == {"process_names": ["steam.exe", "discord.exe"]}
+
+
+@pytest.mark.asyncio
+async def test_the_app_blacklist_accepts_commas_and_blank_lines():
+    backend, connection = _backend_with_connection()
+
+    backend.setAppBlacklist("steam.exe, discord.exe\n\n  game.exe  \n")
+    await _settle()
+
+    assert connection.sent[0][2]["process_names"] == [
+        "steam.exe", "discord.exe", "game.exe"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_app_blacklist_clears_it():
+    """Sending nothing is a real instruction, not a no-op to be swallowed."""
+    backend, connection = _backend_with_connection()
+
+    backend.setAppBlacklist("   \n  ")
+    await _settle()
+
+    assert connection.sent[0][2] == {"process_names": []}
+    assert "cleared" in backend.status
+
+
+@pytest.mark.asyncio
+async def test_the_app_blacklist_requires_a_selected_client():
+    backend, connection = _backend_with_connection(selected="")
+
+    backend.setAppBlacklist("steam.exe")
+    await _settle()
+
+    assert connection.sent == []
     assert "Select a client" in backend.status

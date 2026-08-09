@@ -14,23 +14,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
-from admin_gui.config import ADMIN_ID, MAX_LIVE_SAMPLES
-from admin_gui.connection import EngineConnection
-from admin_gui.models import (
+from admin.config import ADMIN_ID, MAX_LIVE_SAMPLES
+from admin.connection import EngineConnection
+from admin.models import (
     ApplicationModel,
     ClientListModel,
     NetworkSampleModel,
     ReportModel,
     UsbEventModel,
 )
-from admin_gui.validation import analyse_script
+from admin.validation import analyse_script
 from common.constants import (
     DEFAULT_SCRIPT_TIMEOUT,
+    MAX_BLOCK_HOURS,
     MAX_SCRIPT_TIMEOUT,
     MSG_APP_DATA,
     MSG_CLIENT_LIST,
@@ -43,7 +44,9 @@ from common.constants import (
     MSG_PAUSE_STATE,
     MSG_REPORT,
     MSG_SCREEN_CAPTURE,
+    MSG_SET_APP_BLACKLIST,
     MSG_SET_PAUSE,
+    MSG_SET_TIME_RESTRICTION,
     MSG_SET_WEBSITE_POLICY,
     MSG_TERMINATE_PROCESS,
     MSG_TERMINATE_SCRIPT,
@@ -149,6 +152,13 @@ class Backend(QObject):
     selectedClient = Property(
         str, _get_selected, _set_selected, notify=selectedClientChanged
     )
+
+    def _max_block_hours(self) -> int:
+        return MAX_BLOCK_HOURS
+
+    # Exposed so the policy editor states the cap the client actually enforces,
+    # rather than repeating the number and drifting from it.
+    maxBlockHours = Property(int, _max_block_hours, constant=True)
 
     # -- connection slots --------------------------------------------------
 
@@ -395,6 +405,112 @@ class Backend(QObject):
             )
         )
         self._set_status(f"{mode} policy ({len(parsed)} entries) sent")
+
+    @Slot(str)
+    def setAppBlacklist(self, names: str) -> None:
+        """Push the standing application blacklist.
+
+        Not the same action as terminateProcess, which kills one process once.
+        This is the list the agent re-enforces on every collection cycle:
+        blocking a launch means terminating it shortly after it starts, because
+        there is no pre-launch hook without a kernel driver.
+
+        Blacklist-only by design — whitelisting applications cannot reliably
+        enumerate the OS and helper processes legitimate work depends on
+        (README "Access Control"), so unlisted applications are allowed.
+
+        An empty list is a valid instruction: it clears the blacklist.
+        """
+        if not self._require_selection():
+            return
+
+        parsed = [line.strip() for line in names.replace(",", "\n").splitlines() if line.strip()]
+        asyncio.ensure_future(
+            self._connection.send_command(
+                MSG_SET_APP_BLACKLIST,
+                [self._selected_client],
+                {"process_names": parsed},
+            )
+        )
+
+        if parsed:
+            self._set_status(f"App blacklist ({len(parsed)} entries) sent")
+        else:
+            self._set_status("App blacklist cleared")
+
+    # -- time restrictions -------------------------------------------------
+    #
+    # A *scheduled* block, which is not the same thing as a pause: it has a
+    # known end and the student sees it counting down. The pause controls above
+    # are the other mechanism, deliberately without a countdown.
+    #
+    # The client stores one window at a time and caps it at MAX_BLOCK_HOURS, so
+    # what is sent here is a single start/end pair rather than a recurring rule.
+
+    @Slot(int, int, bool)
+    def setTimeRestriction(self, minutes: int, delayMinutes: int, toAll: bool) -> None:
+        """Block a machine, or the room, for `minutes` starting after a delay.
+
+        A delay lets an exam lockout be set up beforehand: the client stores the
+        window immediately and its watchdog raises the overlay when the window
+        opens, with no further contact from here.
+
+        The client shortens anything longer than its cap and reports the end it
+        actually stored, so this warns rather than silently sending more.
+        """
+        targets = self._restriction_targets(toAll)
+        if targets is None:
+            return
+
+        duration = max(1, minutes)
+        start = datetime.now(timezone.utc) + timedelta(minutes=max(0, delayMinutes))
+        end = start + timedelta(minutes=duration)
+
+        asyncio.ensure_future(
+            self._connection.send_command(
+                MSG_SET_TIME_RESTRICTION,
+                targets,
+                {"start": start.isoformat(), "end": end.isoformat()},
+            )
+        )
+
+        capped = " - the client will shorten it to %dh" % MAX_BLOCK_HOURS
+        self._set_status(
+            f"Blocking {len(targets)} client(s) for {duration} min"
+            f"{capped if duration > MAX_BLOCK_HOURS * 60 else ''}"
+        )
+
+    @Slot(bool)
+    def clearTimeRestriction(self, toAll: bool) -> None:
+        """Lift a scheduled block early.
+
+        Does not touch a pause: if one is active the machine stays held, which
+        is the same precedence the client applies.
+        """
+        targets = self._restriction_targets(toAll)
+        if targets is None:
+            return
+
+        asyncio.ensure_future(
+            self._connection.send_command(
+                MSG_SET_TIME_RESTRICTION, targets, {"clear": True}
+            )
+        )
+        self._set_status(f"Clearing the block on {len(targets)} client(s)")
+
+    def _restriction_targets(self, to_all: bool) -> list[str] | None:
+        """Who a restriction applies to, or None with a status set if nobody."""
+        if not to_all:
+            return [self._selected_client] if self._require_selection() else None
+
+        targets = self._connected_client_ids()
+        if not targets:
+            self._set_status("No connected clients")
+            return None
+        return targets
+
+    def _connected_client_ids(self) -> list[str]:
+        return [row["client_id"] for row in self.clients.rows if row.get("connected")]
 
     # -- inbound message handling -----------------------------------------
 

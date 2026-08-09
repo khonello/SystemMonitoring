@@ -198,10 +198,15 @@ def init_database(db_path: Path | None = None) -> None:
     logger.info("Database ready at %s", _db_path)
 
 
+def _cutoff_iso(seconds: float) -> str:
+    """ISO timestamp `seconds` in the past, in the stored timestamp format."""
+    moment = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def _window_start(hours: int) -> str:
     """ISO timestamp `hours` in the past, for window queries."""
-    started = datetime.now(timezone.utc) - timedelta(hours=hours)
-    return started.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return _cutoff_iso(hours * 3600)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +356,16 @@ def store_usb_event(client_id: str, event: dict[str, Any]) -> None:
 # Command audit trail
 # ---------------------------------------------------------------------------
 
+# The `status` vocabulary of a command_log row. A command that could not be
+# delivered ends at one of three terminal states rather than a single
+# "undeliverable", so the audit trail distinguishes "we chose not to keep it",
+# "a newer one replaced it" and "it sat unclaimed too long".
+COMMAND_DISPATCHED: str = "dispatched"
+COMMAND_QUEUED: str = "queued"
+COMMAND_SUPERSEDED: str = "superseded"
+COMMAND_EXPIRED: str = "expired"
+COMMAND_UNDELIVERABLE: str = "undeliverable"
+
 
 def log_command(
     admin_id: str | None,
@@ -401,6 +416,72 @@ def get_command_history(client_id: str | None = None, limit: int = 100) -> list[
                 "SELECT * FROM command_log WHERE client_id = ? ORDER BY id DESC LIMIT ?",
                 (client_id, limit),
             ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Outbox — commands held for a client that was not connected
+# ---------------------------------------------------------------------------
+#
+# There is no separate outbox table. A queued command is just a command_log row
+# whose status says it has not gone out yet, which means the queue and the audit
+# trail cannot disagree with each other, and retention prunes both at once.
+#
+# These queries filter on (client_id, status) and command_log carries no index
+# for that. Deliberate: command_log grows with operator actions, not with
+# telemetry, so it is orders of magnitude smaller than app_logs, and B4 in
+# issues.md records what happened last time an index went in on a hunch.
+# Measure before adding one.
+
+
+def queue_command(client_id: str, command_id: str, command_type: str) -> None:
+    """Hold an already-logged command for a client that is not connected.
+
+    Supersedes any earlier queued command of the same type for this client.
+    Durable commands declare state to converge to, so replaying three
+    successive blacklist updates would achieve nothing the last one does not —
+    and the superseded rows stay in the log, visible as what they are.
+    """
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE command_log SET status = ?
+            WHERE client_id = ? AND command_type = ? AND status = ?
+              AND command_id != ?
+            """,
+            (COMMAND_SUPERSEDED, client_id, command_type, COMMAND_QUEUED, command_id),
+        )
+        connection.execute(
+            "UPDATE command_log SET status = ? WHERE command_id = ?",
+            (COMMAND_QUEUED, command_id),
+        )
+
+
+def take_queued_commands(client_id: str, ttl_seconds: int) -> list[dict[str, Any]]:
+    """Expire stale queued commands, then return what is still worth sending.
+
+    Oldest first, so a client that reconnects applies them in the order the
+    operator issued them. The caller marks each dispatched only once it has
+    actually gone out — a row stays queued if the write fails, rather than
+    being lost to an optimistic status update.
+    """
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE command_log SET status = ?
+            WHERE client_id = ? AND status = ? AND timestamp < ?
+            """,
+            (COMMAND_EXPIRED, client_id, COMMAND_QUEUED, _cutoff_iso(ttl_seconds)),
+        )
+        rows = connection.execute(
+            """
+            SELECT command_id, command_type, command_data
+            FROM command_log
+            WHERE client_id = ? AND status = ?
+            ORDER BY id
+            """,
+            (client_id, COMMAND_QUEUED),
+        ).fetchall()
     return [dict(row) for row in rows]
 
 

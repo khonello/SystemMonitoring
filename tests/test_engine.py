@@ -17,7 +17,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.constants import ROLE_ADMIN, ROLE_CLIENT
+from common.constants import (
+    MSG_APP_DATA,
+    MSG_NETWORK_DATA,
+    MSG_USB_EVENT,
+    ROLE_ADMIN,
+    ROLE_CLIENT,
+)
 from engine import connection_manager, database, main as engine_main
 
 
@@ -187,21 +193,22 @@ def test_setup_db_reports_failure(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_handlers_persist_monitoring_data():
-    """command_handler routes each message type into the right table."""
-    from engine import command_handler
+async def test_telemetry_flow_persists_into_the_right_table():
+    """Each telemetry type reaches its table through the real dispatch path."""
+    from common.protocol import create_message
+    from engine.command_handler import process_message
 
     database.store_client("pc-01", "host", "127.0.0.1", "Windows")
 
-    await command_handler.handle_app_data(
-        "pc-01", {"applications": [{"process_name": "chrome.exe", "cpu_percent": 5.0}]}
-    )
-    await command_handler.handle_network_data(
-        "pc-01", {"bytes_sent": 100, "bytes_received": 200}
-    )
-    await command_handler.handle_usb_event(
-        "pc-01", {"event": "inserted", "device_name": "Kingston"}
-    )
+    for message in (
+        create_message(
+            MSG_APP_DATA,
+            {"applications": [{"process_name": "chrome.exe", "cpu_percent": 5.0}]},
+        ),
+        create_message(MSG_NETWORK_DATA, {"bytes_sent": 100, "bytes_received": 200}),
+        create_message(MSG_USB_EVENT, {"event": "inserted", "device_name": "Kingston"}),
+    ):
+        await process_message("pc-01", ROLE_CLIENT, message)
 
     assert database.get_client_apps("pc-01")[0]["process_name"] == "chrome.exe"
     assert database.get_network_summary("pc-01")["samples"] == 1

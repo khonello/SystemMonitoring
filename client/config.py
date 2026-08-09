@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Final
@@ -50,12 +51,12 @@ _PACKAGE_DIR: Final[Path] = Path(__file__).resolve().parent
 # The pinned, embeddable Python shipped inside the Client Agent installer.
 # Script validation and execution must never fall back to a system-installed
 # interpreter (README "Bundled Runtime & Script Validation"). Absent until the
-# Phase 4 packaging step — check exists() before use.
+# Phase 8 packaging step — check exists() before use.
 BUNDLED_PYTHON_PATH: Final[Path] = _PACKAGE_DIR / "runtime" / "python.exe"
 
 # The two on-demand helper executables. Both are spawned like scripts rather
 # than run in-process, so neither can block the agent's event loop. Absent
-# until the Phase 4 packaging step; the agent falls back to running the modules
+# until the Phase 8 packaging step; the agent falls back to running the modules
 # directly and says so loudly.
 DIALOG_EXE_PATH: Final[Path] = _PACKAGE_DIR / "bin" / "labmonitor-dialog.exe"
 OVERLAY_EXE_PATH: Final[Path] = _PACKAGE_DIR / "bin" / "labmonitor-overlay.exe"
@@ -63,9 +64,41 @@ OVERLAY_EXE_PATH: Final[Path] = _PACKAGE_DIR / "bin" / "labmonitor-overlay.exe"
 # Security-sensitive local state: the derived auth key and the tamper-protected
 # lockout schedule. %ProgramData%, never %APPDATA% — it must not be writable by
 # the logged-in user (README "Local State").
-STATE_DIR: Final[Path] = (
+#
+# ACLs are applied to this root and inherited, so a per-client directory created
+# later is protected without a second icacls call.
+STATE_ROOT: Final[Path] = (
     Path(os.environ.get("PROGRAMDATA", "C:/ProgramData")) / "SystemMonitoring"
 )
+
+
+def state_component(client_id: str) -> str:
+    """Reduce a client id to one safe directory name.
+
+    `CLIENT_ID` comes from the environment, so it reaches this unvalidated and
+    must never be joined onto a path as-is — `../../Windows` would escape the
+    state root entirely.
+
+    Sanitising alone is not enough, because it is lossy: `lab1/pc-01` and
+    `lab1_pc-01` both reduce to the same name, which would silently reunite two
+    machines' state — the exact bug this directory split exists to prevent. The
+    hash suffix restores distinctness, and being derived from the full original
+    id it is stable across runs.
+    """
+    safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in client_id)
+    safe = safe.strip("._-")[:40] or "client"
+    digest = hashlib.sha256(client_id.encode("utf-8")).hexdigest()[:8]
+    return f"{safe}-{digest}"
+
+
+# Per client, not per machine. Several agents on one box would otherwise share
+# one lockout schedule, one pause file and one cached blacklist, overwriting
+# each other (issues.md B21).
+#
+# Anything reading this out of process — the watchdog under its Scheduled Task,
+# the installer — must resolve the *same* client id, which is why both are given
+# it explicitly rather than left to inherit an environment they do not get.
+STATE_DIR: Final[Path] = STATE_ROOT / state_component(CLIENT_ID)
 
 # Per-execution scratch space for script stdout/stderr. Cleared once each run
 # reports COMMAND_COMPLETE (README "Script Execution Model").

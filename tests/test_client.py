@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from client import lockout, policy, state
+from client import executor, lockout, policy, state
 from client.connection import reconnect_delay
 from client.executor import handle_command, running_scripts, terminate_process
 from client.monitors.network_monitor import collect_network_data
@@ -31,6 +31,10 @@ from common.constants import (
     POLICY_MODE_WHITELIST,
     RECONNECT_DELAY,
     RECONNECT_MAX_DELAY,
+    STATUS_ERROR,
+    STATUS_SUCCESS,
+    STREAM_LIMIT,
+    STREAM_OVERHEAD_ALLOWANCE,
 )
 
 IS_WINDOWS = sys.platform == "win32"
@@ -738,3 +742,121 @@ async def test_screen_capture_produces_an_image():
         assert len(result["image_base64"]) > 1000
     else:
         assert "message" in result
+
+
+@pytest.mark.asyncio
+async def test_capture_refuses_a_payload_over_the_message_budget(monkeypatch):
+    """Refused with a reason, rather than handed to the framing to explode on.
+
+    A line over STREAM_LIMIT makes asyncio's reader raise mid-stream, costing
+    the agent its connection and reporting nothing about the actual cause
+    (issues.md B18).
+    """
+    oversized = "A" * (STREAM_LIMIT - STREAM_OVERHEAD_ALLOWANCE + 1)
+    monkeypatch.setattr(
+        executor, "_grab_screen", lambda quality: (oversized, 7680, 4320, len(oversized))
+    )
+
+    result = await executor.capture_screen(quality=95)
+
+    assert result["status"] == STATUS_ERROR
+    assert "quality" in result["message"]
+    assert "image_base64" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_capture_within_the_budget_is_returned(monkeypatch):
+    monkeypatch.setattr(
+        executor, "_grab_screen", lambda quality: ("QUJD", 1920, 1080, 3)
+    )
+
+    result = await executor.capture_screen()
+
+    assert result["status"] == STATUS_SUCCESS
+    assert result["image_base64"] == "QUJD"
+
+
+# ---------------------------------------------------------------------------
+# Per-client state directory (issues.md B21)
+# ---------------------------------------------------------------------------
+
+
+def test_state_component_cannot_escape_the_state_root():
+    """CLIENT_ID comes from the environment, so it reaches the path unvalidated."""
+    from client.config import STATE_ROOT, state_component
+
+    for hostile in ("../../Windows/System32", "..", "/etc/passwd", r"C:\Windows", "."):
+        component = state_component(hostile)
+
+        assert "/" not in component and "\\" not in component
+        assert component not in {".", ".."}
+        # The decisive check: joining it stays inside the root.
+        assert STATE_ROOT.resolve() in (STATE_ROOT / component).resolve().parents
+
+
+def test_state_component_distinguishes_ids_that_sanitise_alike():
+    """Sanitising is lossy, and two machines sharing state is the bug being fixed."""
+    from client.config import state_component
+
+    assert state_component("lab1/pc-01") != state_component("lab1_pc-01")
+
+
+def test_state_component_is_stable_for_the_same_id():
+    from client.config import state_component
+
+    assert state_component("lab1-pc-07") == state_component("lab1-pc-07")
+
+
+def test_state_component_survives_an_id_with_nothing_usable_in_it():
+    from client.config import STATE_ROOT, state_component
+
+    component = state_component("///")
+
+    assert component
+    assert STATE_ROOT.resolve() in (STATE_ROOT / component).resolve().parents
+
+
+def test_two_clients_on_one_machine_get_separate_directories():
+    """The whole point of B21: shared state meant they overwrote each other."""
+    from client.config import STATE_ROOT, state_component
+
+    first = STATE_ROOT / state_component("lab1-pc-01")
+    second = STATE_ROOT / state_component("lab1-pc-02")
+
+    assert first != second
+    assert first.parent == second.parent == STATE_ROOT
+
+
+@windows_only
+def test_installer_pins_the_client_id_into_both_commands():
+    """A service and a Scheduled Task inherit neither the installer's
+    environment nor each other's, so an id left to be re-derived could resolve
+    differently and point the watchdog at the wrong state."""
+    from client.config import CLIENT_ID
+    from client.install_service import agent_command, watchdog_command
+
+    assert f"--id {CLIENT_ID}" in agent_command()
+    assert f"--id {CLIENT_ID}" in watchdog_command()
+
+
+def test_the_watchdog_applies_its_id_to_the_environment(monkeypatch):
+    """A Scheduled Task under SYSTEM inherits nothing from the agent, so without
+    --id it would read a different state directory, find no schedule, and
+    release a machine that should still be blocked."""
+    import os
+
+    from client import watchdog
+
+    monkeypatch.delenv("CLIENT_ID", raising=False)
+
+    # No schedule is stored, so enforce_once finds nothing to do and the pass is
+    # a no-op against the isolated state directory this suite uses.
+    assert watchdog.main(["--id", "probe-id"]) == 0
+    assert os.environ["CLIENT_ID"] == "probe-id"
+
+
+def test_the_watchdog_runs_without_an_id():
+    """It still has to work when the id comes from the environment instead."""
+    from client import watchdog
+
+    assert watchdog.main([]) == 0

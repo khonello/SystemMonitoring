@@ -2,7 +2,7 @@
 
 The transport was plain JSON over TCP, readable by anyone who could observe LAN
 traffic — script contents, screen captures, lockout schedules. Authentication
-(Phase 6) stops impersonation but does nothing about confidentiality; these are
+(Phase 7) stops impersonation but does nothing about confidentiality; these are
 separate problems and both need solving.
 
 Design

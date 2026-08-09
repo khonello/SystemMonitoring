@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Administrator GUI entry point.
 
-    python -m admin_gui.main
+    python -m admin.main
 
 qasync runs the asyncio loop on top of Qt's, so the GUI and the Engine socket
 share one thread. Everything below is ordinary Qt startup apart from that.
@@ -18,8 +18,8 @@ from PySide6.QtCore import QSettings, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
-from admin_gui.backend import Backend
-from admin_gui.config import (
+from admin.backend import Backend
+from admin.config import (
     APPLICATION,
     DEFAULT_HOST,
     DEFAULT_PORT,

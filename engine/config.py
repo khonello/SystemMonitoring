@@ -51,6 +51,15 @@ PRUNE_INTERVAL: Final[int] = int(os.environ.get("ENGINE_PRUNE_INTERVAL", 6 * 60 
 # as it took.
 PRUNE_BATCH_SIZE: Final[int] = 5_000
 
+# How long a command queued for an offline client stays worth delivering.
+#
+# Only the commands in DURABLE_COMMANDS ever queue, and each is state the client
+# should converge to rather than a point-in-time action, so a long window is the
+# right default: a machine switched off overnight should still come back with
+# the policy that was set while it was away. Queued commands supersede earlier
+# ones of the same type, so this bounds staleness, not volume.
+OUTBOX_TTL: Final[int] = int(os.environ.get("ENGINE_OUTBOX_TTL", 24 * 60 * 60))
+
 LOG_LEVEL: Final[str] = os.environ.get("ENGINE_LOG_LEVEL", "INFO")
 
 # --- TLS -------------------------------------------------------------------

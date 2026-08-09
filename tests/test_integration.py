@@ -1,12 +1,14 @@
-"""End-to-end scaffold smoke tests — the Phase 1 exit criteria, encoded.
+"""End-to-end tests: the real Engine handler and the real client and admin
+connection modules, in one process.
 
-These run the real Engine handler and the real client connection module in one
-process. They assert only that messages *flow*: registration completes, a
-heartbeat is accepted, and an admin command reaches a client and comes back.
-What the client does with the command is a Phase 4 stub, so the expected
-answer here is "not implemented" — that is the point.
+Began as the Phase 1 exit criteria encoded as tests — that messages simply
+*flow* — and grew with each phase rather than being replaced. It now also
+covers registration and its refusals, capacity caps, telemetry reaching the
+database, the command audit trail, a TLS round trip, the offline-command
+outbox, and the stream limit at both ends of its range.
 
-Phase 2 onward replaces these assertions with ones about real behaviour.
+Anything asserting a client reply of "not implemented" is gone: the Client
+Agent implements its commands as of Phase 4.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from common.constants import (
     MSG_REGISTER_CHALLENGE,
     MSG_REGISTER_REJECT,
     MSG_REGISTER_RESPONSE,
+    MSG_SET_APP_BLACKLIST,
     MSG_TERMINATE_PROCESS,
     ROLE_ADMIN,
     ROLE_CLIENT,
@@ -204,7 +207,7 @@ async def test_bypass_skips_the_handshake_entirely(engine_port, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_verification_is_rejected(engine_port, monkeypatch):
-    """The Phase 1 stub accepts everything; when Phase 6 makes it discriminate,
+    """The Phase 1 stub accepts everything; when Phase 7 makes it discriminate,
     a wrong answer must close the door."""
     monkeypatch.setattr("engine.main.verify_challenge_response", lambda *_: False)
 
@@ -603,7 +606,9 @@ async def test_admin_command_is_audited_and_status_tracked(connected_client):
         assert len(history) == 1
         assert history[0]["admin_id"] == "admin-01"
         assert history[0]["command_type"] == MSG_TERMINATE_PROCESS
-        # The client answered "not implemented", so the audit row reflects that.
+        # The client really did try and found no chrome.exe running, so it
+        # answered with an error — and the audit row reflects the reply rather
+        # than the dispatch. That round trip is the point of the test.
         assert history[0]["status"] == STATUS_ERROR
     finally:
         writer.close()
@@ -631,6 +636,51 @@ async def test_undeliverable_command_is_still_audited(connected_client):
         history = database.get_command_history("pc-that-is-not-here")
 
         assert history[0]["status"] == "undeliverable"
+    finally:
+        writer.close()
+
+
+@pytest.mark.asyncio
+async def test_a_policy_set_while_offline_arrives_on_reconnect(engine_port):
+    """The outbox flush is wired into registration, not merely callable.
+
+    A blacklist set while the machine was switched off must be waiting for it
+    the moment it comes back, before its first heartbeat.
+    """
+    database.store_client(CLIENT_ID, "host", HOST, "Windows")
+
+    reader, writer = await _open_admin(engine_port)
+    try:
+        await _send(
+            writer,
+            create_message(
+                MSG_ADMIN_COMMAND,
+                {
+                    "command_type": MSG_SET_APP_BLACKLIST,
+                    "target_clients": [CLIENT_ID],
+                    "parameters": {"apps": ["game.exe"]},
+                },
+                client_id="admin-01",
+            ),
+        )
+        await asyncio.sleep(0.1)
+        assert database.get_command_history(CLIENT_ID)[0]["status"] == (
+            database.COMMAND_QUEUED
+        )
+
+        assert await client_connection.connect(HOST, engine_port)
+        try:
+            assert await client_connection.register()
+
+            message = await asyncio.wait_for(client_connection.receive(), timeout=TIMEOUT)
+
+            assert message["type"] == MSG_SET_APP_BLACKLIST
+            assert message["payload"] == {"apps": ["game.exe"]}
+            assert database.get_command_history(CLIENT_ID)[0]["status"] == (
+                database.COMMAND_DISPATCHED
+            )
+        finally:
+            await client_connection.close()
     finally:
         writer.close()
 
@@ -673,3 +723,74 @@ async def test_disconnect_marks_the_client_offline(engine_port):
     await asyncio.sleep(0.15)
 
     assert database.get_client(CLIENT_ID)["status"] == "offline"
+
+
+# ---------------------------------------------------------------------------
+# Stream limit
+# ---------------------------------------------------------------------------
+#
+# Both ends open their streams with STREAM_LIMIT because asyncio caps a single
+# line at 64KiB by default. Until now nothing had ever sent a message anywhere
+# near either bound, so neither the working case nor the failure mode had been
+# observed (issues.md B18).
+
+
+@pytest.mark.asyncio
+async def test_a_multi_megabyte_message_survives_the_stream_limit(connected_client):
+    """Well past asyncio's 64KiB default line cap, well under STREAM_LIMIT.
+
+    A base64 screen capture is the payload this exists for, so the test carries
+    one shaped like it, relayed client -> Engine -> admin.
+    """
+    reader, writer = await _open_admin(connected_client)
+    try:
+        payload = "A" * (4 * 1024 * 1024)
+
+        await client_connection.send(
+            create_message(
+                MSG_COMMAND_RESPONSE,
+                {"command_id": "cmd_big", "status": "success", "image_base64": payload},
+                client_id=CLIENT_ID,
+            )
+        )
+
+        relayed = await _recv_until(reader, MSG_COMMAND_RESPONSE)
+
+        assert relayed["payload"]["image_base64"] == payload
+    finally:
+        writer.close()
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_message_drops_the_peer_rather_than_hanging(engine_port):
+    """Over the limit the reader raises, and the Engine must fail closed.
+
+    Documents the failure mode rather than endorsing it: the client refuses to
+    build a capture this large in the first place
+    (test_capture_refuses_a_payload_over_the_message_budget), so reaching here
+    means something else sent it.
+    """
+    reader, writer = await asyncio.open_connection(HOST, engine_port, limit=STREAM_LIMIT)
+    try:
+        await _send(
+            writer, create_message(MSG_REGISTER, {"role": ROLE_CLIENT}, client_id="pc-big")
+        )
+        reply = await _recv(reader)
+        if reply["type"] == MSG_REGISTER_CHALLENGE:
+            await _send(
+                writer,
+                create_message(
+                    MSG_REGISTER_RESPONSE, {"response": "test-response"}, client_id="pc-big"
+                ),
+            )
+            reply = await _recv(reader)
+        assert reply["type"] == MSG_REGISTER_ACK
+
+        # One line comfortably past the 16MB ceiling.
+        writer.write(b'{"type":"APP_DATA","payload":{"x":"' + b"A" * STREAM_LIMIT + b'"}}\n')
+        await writer.drain()
+
+        # The Engine drops the connection instead of leaving the peer waiting.
+        assert await asyncio.wait_for(reader.read(), timeout=TIMEOUT) == b""
+    finally:
+        writer.close()

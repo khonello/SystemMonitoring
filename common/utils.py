@@ -36,6 +36,17 @@ def new_command_id() -> str:
     return f"cmd_{uuid4().hex[:12]}"
 
 
+def new_trace_id() -> str:
+    """Generate an identifier that follows one message through the Engine.
+
+    Distinct from a command_id: that names a *script execution* and lives for as
+    long as the script does, while a trace names a single message's passage
+    through its flow — arrival, persistence, relay. Telemetry has no command_id,
+    which is precisely why an unrelayed APP_DATA was previously untraceable.
+    """
+    return f"trc_{uuid4().hex[:8]}"
+
+
 def generate_client_id() -> str:
     """Derive a default client identifier from the host."""
     return f"{socket.gethostname()}-{platform.system()}"

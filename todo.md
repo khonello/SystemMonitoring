@@ -12,12 +12,20 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 | 1 — Scaffold pass (all components) | ✅ done |
 | 2 — Engine | ✅ done |
 | 3 — Admin GUI | ✅ done |
-| 4 — Client Agent | ✅ done, except packaging (blocked on [issues.md](issues.md) A5) |
-| 5 — Full integration | next |
-| 6 — Authentication | not started |
+| 4 — Client Agent | ✅ done (packaging moved to Phase 8) |
+| 5 — Manual per-system verification | **next** |
+| 6 — Full integration | not started |
+| 7 — Authentication | not started |
+| 8 — Packaging | not started |
 
-**161 tests passing.** Open problems and decisions live in
+**263 tests passing.** Open problems and decisions live in
 [issues.md](issues.md); section A there needs your input.
+
+**Packaging moved from Phase 4 to Phase 8** — packaging code that has never been
+proven on its target machine is the wrong order of work. It is pure build work
+with no design risk left in it (the runtime question was settled in
+[issues.md](issues.md) B11), so it gains least from being early and blocks
+nothing. The cost of deferring it is stated in Phase 5 below.
 
 ---
 
@@ -26,7 +34,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 - [x] `git init` + `.gitignore` (venv, `__pycache__`, `*.db`, `logs/`, bundled
       runtimes, auth material). No commit made yet.
 - [x] Create package tree per README "Project Structure":
-      `engine/`, `client/monitors/`, `admin_gui/qml/`, `common/`, `tests/`, `docs/`
+      `engine/`, `client/monitors/`, `admin/qml/`, `common/`, `tests/`, `docs/`
 - [x] `__init__.py` in every Python package
 - [x] `requirements.txt` — `psutil==7.2.2`, `PySide6==6.11.1`, `pytest==9.1.1`,
       `pytest-asyncio==1.4.0`; `requirements-client.txt` — `pywin32==312`
@@ -87,7 +95,7 @@ present but empty. No real logic in this phase.
       `execute_script` already shaped to *not* await completion
 - [ ] Windows service wrapper — deferred to Phase 4 packaging, not scaffolded
 
-### admin_gui/
+### admin/
 - [x] `main.py`, `backend.py` (signals/slots, no transport), `models.py`
       (`ClientListModel`)
 - [x] `qml/main.qml`, `ClientList.qml`, `MonitoringPanel.qml`, `CommandPanel.qml`
@@ -202,9 +210,11 @@ present but empty. No real logic in this phase.
 - [x] Verified end-to-end against a live Engine under WSL with a real client:
       roster, live telemetry relay, validation rejection, command round trip,
       all five reports, and policy dispatch reaching the audit trail
-- [ ] Time-schedule editor — deferred to Phase 4, where the lockout overlay
-      that enforces it is built. Editing schedules with nothing to enforce them
-      would be UI without behaviour.
+- [x] Time-schedule editor — deferred to Phase 4, where the lockout overlay
+      that enforces it is built. Phase 4 built the enforcement and did not come
+      back for the editor; **now done** (issues.md B16). One-off windows with a
+      start delay, matching what the client can actually store, with the 2-hour
+      cap warned about rather than duplicated.
 - [x] **Gate: Admin tested against the completed Engine before Client work begins**
 
 **Engine changes this phase required:**
@@ -279,18 +289,12 @@ present but empty. No real logic in this phase.
 - [x] Watchdog runs outside the connection loop — a machine does not become
       unrestricted because the network went down
 
-### Packaging
-- [ ] **Bundle the pinned embeddable Python for script execution.** No longer
-      blocked — scripts are stdlib + `subprocess` only, so the embeddable
-      distribution is sufficient and the import policy enforces it
-      ([issues.md](issues.md) B11). Until this is built the agent falls back to
-      the running interpreter and logs a warning.
-- [ ] Freeze the helper windows into **one** executable with a mode flag, so
-      the Qt payload is paid for once rather than twice. Independent of A5 —
-      an embeddable distribution could never carry PySide6 anyway.
+### Packaging — **moved to Phase 8**
+
 - [x] `install_service.py` — service registration, `%ProgramData%` ACLs, and
-      the watchdog Scheduled Task in one step
-- [x] Tests — 161 passing overall
+      the watchdog Scheduled Task in one step. Stays here: it is installation,
+      not packaging, and needs nothing built first.
+- [x] Tests — 161 passing at the close of this phase
 
 **Verified live:** the dialog rendered, counted down and returned exit code 2
 (timed out); the overlay covered the primary display for its full window,
@@ -318,10 +322,59 @@ SYSTEM. See issues.md C10.
 - [x] `certs/` and `*.pem` gitignored — the key is secret, the certificate is
       deployment-specific
 
-## Phase 5 — Full Integration
+## Phase 5 — Manual per-system verification ⬅ next
+
+Prove each unit works **on its own, on its own machine**, before anything is
+integrated or packaged. Each system has a diagnostic that needs nothing else
+running, so a failure points at one component instead of at "the system".
+
+- [x] `python -m engine`, `python -m client`, `python -m admin` — argparse on
+      each unit, in a `cli.py` per package. Config is read from the environment
+      into `Final` constants at import time, so flags are applied to the
+      environment *before* the component is imported; the three `main.py` files
+      were not touched and still work environment-only.
+- [x] `labmonitor.py` — dev launcher dispatching to all three plus the helpers,
+      importing each lazily so the Engine never pulls in PySide6
+- [x] `engine --check` — resolved config, TLS posture, prepares the database,
+      does not bind the port
+- [x] `client --once` — one real collection cycle, printed, with no Engine
+- [x] `client --check` — config, local state, and which bundled pieces are absent
+- [x] `admin --check-qml` — loads every QML file offscreen, reports warnings
+
+Verified on this machine: `--check-qml` loads all 7 QML files clean; `--once`
+returned 212 processes with real CPU numbers, window titles, network counters
+and idle time.
+
+To run by hand:
+
+- [ ] Engine under WSL — `--check`, then serve, and confirm the listen address,
+      transport mode and auth posture in the log
+- [ ] Client on a Windows machine — `--once`, then a live session; confirm
+      registration, heartbeats every 15s, and telemetry on its own intervals
+- [ ] Administrator — `--check-qml`, then connected; roster, live dashboard,
+      a command round trip, all five reports
+- [ ] Dialog window — `labmonitor.py dialog --message "Test" --timeout 15`
+- [ ] Overlay window — `labmonitor.py overlay --until <near-future ISO>`.
+      **Takes over the screen and disables Task Manager**; run it when
+      convenient, and check both directions of the Task Manager policy
+      ([issues.md](issues.md) C10)
+
+**What this phase cannot tell you.** With packaging last, all of the above
+exercises the *fallback* paths: the running interpreter for script validation
+and execution, and the overlay run as a module rather than as an executable. A
+green Phase 5 does not transfer to the packaged build, so Phase 8 carries a
+short re-verification of the same ground.
+
+---
+
+## Phase 6 — Full Integration
 
 - [ ] All three components running together
-- [ ] Multi-client scenarios (target 10+, design ceiling 50)
+- [ ] Multi-client scenarios (target 10+, design ceiling 50). **One box can
+      simulate many clients for telemetry, policy and reporting, but not for
+      enforcement** — separate state does not buy a separate screen, so
+      overlays would fight over one display ([issues.md](issues.md) D8). Use
+      VMs or real machines for the enforcement half.
 - [ ] Network failure / reconnect behavior
 - [ ] Performance + load testing
 - [ ] **Re-measure client RAM footprint** — README flags the <50MB figure as
@@ -329,7 +382,7 @@ SYSTEM. See issues.md C10.
 
 ---
 
-## Phase 6 — Authentication (last, but a hard prerequisite for real deployment)
+## Phase 7 — Authentication (a hard prerequisite for real deployment)
 
 - [ ] Master secret generation + admin-side storage
 - [ ] Per-client derived keys: `HMAC(master_secret, client_id)`
@@ -343,7 +396,33 @@ SYSTEM. See issues.md C10.
 
 ---
 
+## Phase 8 — Packaging (last)
+
+Moved out of Phase 4. No design decisions remain — the runtime question was
+settled in [issues.md](issues.md) B11 — so this is build work, and it is worth
+least before the code it wraps has been proven on a real machine.
+
+- [ ] **Bundle the pinned embeddable Python for script execution.** Scripts are
+      stdlib + `subprocess` only, so the embeddable distribution is sufficient
+      and the import policy enforces it. Until this exists the agent and the
+      Admin validator both fall back to the running interpreter and log a
+      warning.
+- [ ] Freeze the helper windows into **one** executable with a mode flag, so the
+      Qt payload is paid for once rather than twice. An embeddable distribution
+      has no pip and so could never carry PySide6 — these two concerns stay
+      independent.
+- [ ] Both bundles must be the **same pinned version**, or a script that
+      validates on the Admin console can still fail on a lab machine
+- [ ] Windows service wrapper (the deferred Phase 1 item)
+- [ ] **Re-verify the Phase 5 ground against the packaged build** — script
+      validation, script execution and the overlay all run through different
+      paths once the bundles exist
+
+---
+
 ## Deferred / Out of scope
 
-TLS (transport is plaintext JSON even after auth — sniffable on the LAN),
 Postgres migration, and everything under README "Removed Features".
+
+*(TLS was here, and is no longer deferred — it was pulled forward and built in
+Phase 4.5 above.)*

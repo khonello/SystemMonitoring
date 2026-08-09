@@ -975,7 +975,7 @@ project_root/
 │   ├── connection.py         # Engine connection
 │   └── config.py             # Configuration
 │
-├── admin_gui/                 # Administrator GUI
+├── admin/                 # Administrator GUI
 │   ├── main.py               # GUI entry point
 │   ├── qml/                  # QML files
 │   │   ├── main.qml
@@ -2124,7 +2124,7 @@ at runtime — a process should not be able to widen its own permissions.
 pip install -r requirements-admin.txt
 
 # Run GUI
-python -m admin_gui.main
+python -m admin.main
 ```
 
 The Client Agent's two helper windows — the warning dialog and the lockout

@@ -25,7 +25,7 @@ def plaintext_by_default(monkeypatch):
     value at import time, so patching config alone would have no effect.
     """
     monkeypatch.setattr("client.connection.TLS_ENABLED", False)
-    monkeypatch.setattr("admin_gui.connection.TLS_ENABLED", False)
+    monkeypatch.setattr("admin.connection.TLS_ENABLED", False)
 
 
 @pytest.fixture(autouse=True)

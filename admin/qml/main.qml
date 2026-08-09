@@ -7,8 +7,28 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: window
 
-    width: 1200
-    height: 780
+    // A wide rectangle: height tracks width at 30%. Widening the window keeps
+    // the shape; dragging the height directly overrides it, which is the normal
+    // QML behaviour of a binding replaced by the window manager.
+    //
+    // The shape suits the layout below — a horizontal split with the roster
+    // beside the panels — but it leaves little vertical room, which is why the
+    // command panel's height is proportional rather than fixed.
+    readonly property real aspectRatio: 0.30
+
+    width: 1600
+    height: Math.round(width * aspectRatio)
+
+    minimumWidth: 1100
+    minimumHeight: Math.round(minimumWidth * aspectRatio)
+
+    // Re-applied rather than left to the binding alone. Dragging a window edge
+    // makes the window manager write height directly, which replaces the
+    // binding above and would strand the ratio wherever it happened to be.
+    // The offscreen platform cannot exercise a real user resize, so this is
+    // belt-and-braces for the case the automated check cannot reach.
+    onWidthChanged: height = Math.round(width * aspectRatio)
+
     visible: true
     title: "Lab Monitor - Administrator"
 
@@ -156,9 +176,12 @@ ApplicationWindow {
                 PolicyPanel {}
             }
 
+            // Proportional, not the fixed 260 it used to be. In a window this
+            // wide and short a fixed panel would claim most of the height and
+            // leave the tab above it unusable.
             CommandPanel {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 260
+                Layout.preferredHeight: Math.min(260, Math.round(window.height * 0.34))
             }
         }
     }

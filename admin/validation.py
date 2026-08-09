@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from admin_gui.config import BUNDLED_PYTHON_PATH
+from admin.config import BUNDLED_PYTHON_PATH
 from common.constants import SCRIPT_TYPE_POWERSHELL, SCRIPT_TYPE_PYTHON
 
 logger = logging.getLogger(__name__)

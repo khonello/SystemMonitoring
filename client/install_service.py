@@ -27,7 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from client.config import STATE_DIR
+from client.config import CLIENT_ID, STATE_DIR, STATE_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -52,20 +52,27 @@ def _run(argv: list[str]) -> tuple[int, str]:
     return completed.returncode, (completed.stdout + completed.stderr).strip()
 
 
+# Both commands carry the client id explicitly. Neither a service nor a
+# Scheduled Task inherits the environment this installer ran with, and state now
+# lives under a per-client directory — so an id left to be re-derived at run
+# time could resolve differently and point the watchdog at the wrong state
+# (issues.md B21). Pinning it here is what keeps agent and watchdog in step.
+
+
 def agent_command() -> str:
     """Command line that starts the agent."""
     frozen = Path(sys.executable).parent / "labmonitor-agent.exe"
     if frozen.exists():
-        return str(frozen)
-    return f'"{sys.executable}" -m client.main'
+        return f'"{frozen}" --id {CLIENT_ID}'
+    return f'"{sys.executable}" -m client --id {CLIENT_ID}'
 
 
 def watchdog_command() -> str:
     """Command line for the independent lockout check."""
     frozen = Path(sys.executable).parent / "labmonitor-watchdog.exe"
     if frozen.exists():
-        return str(frozen)
-    return f'"{sys.executable}" -m client.watchdog'
+        return f'"{frozen}" --id {CLIENT_ID}'
+    return f'"{sys.executable}" -m client.watchdog --id {CLIENT_ID}'
 
 
 # ---------------------------------------------------------------------------
@@ -79,11 +86,16 @@ def secure_state_directory() -> bool:
     Without this the lockout schedule sits somewhere the logged-in user can
     edit. The HMAC would still catch the edit and fail closed, but defence in
     depth costs one icacls call.
+
+    Applied to the **root**, with the object- and container-inherit flags, so a
+    per-client directory created later is protected the moment it appears —
+    rather than depending on the installer having been run for that client.
     """
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     code, output = _run([
-        "icacls", str(STATE_DIR),
+        "icacls", str(STATE_ROOT),
         "/inheritance:r",
         "/grant:r", "SYSTEM:(OI)(CI)F",
         "/grant:r", "Administrators:(OI)(CI)F",
@@ -91,10 +103,10 @@ def secure_state_directory() -> bool:
     ])
 
     if code != 0:
-        logger.error("Could not restrict %s: %s", STATE_DIR, output)
+        logger.error("Could not restrict %s: %s", STATE_ROOT, output)
         return False
 
-    logger.info("State directory secured: %s", STATE_DIR)
+    logger.info("State root secured: %s (this client: %s)", STATE_ROOT, STATE_DIR)
     return True
 
 

@@ -23,7 +23,11 @@ packages = [
     "engine",
     "client",
     "client.monitors",
-    "admin_gui",
+    "admin",
+    # Operator tooling, not a deployable unit — but `python -m scripts.generate_cert`
+    # is the documented way to produce the Engine certificate, and without this
+    # it resolves only when the current directory happens to be the repo root.
+    "scripts",
 ]
 
 [tool.pytest.ini_options]

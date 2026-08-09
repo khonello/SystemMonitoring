@@ -32,6 +32,7 @@ from typing import Any
 from client.config import OVERLAY_EXE_PATH
 from client.state import PAUSE_FILE, SCHEDULE_FILE, StateTampered, read_state, write_state
 from common.constants import (
+    MAX_BLOCK_HOURS,
     OVERLAY_MODE_PAUSE,
     OVERLAY_MODE_SCHEDULED,
     PAUSE_MAX_SECONDS,
@@ -40,9 +41,6 @@ from common.constants import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Safety timeout against the overlay's own failure modes.
-MAX_BLOCK_HOURS = 2
 
 # How often the agent checks whether the overlay should still be running.
 WATCHDOG_INTERVAL = 30
@@ -241,7 +239,7 @@ def _overlay_command(end: datetime, mode: str) -> list[str]:
     """argv for the overlay, preferring the bundled executable.
 
     Falls back to running the module with the current interpreter during
-    development, before the Phase 4 packaging step has produced the exe.
+    development, before the Phase 8 packaging step has produced the exe.
     """
     args = ["--until", end.isoformat(), "--mode", mode]
 

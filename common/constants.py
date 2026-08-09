@@ -24,6 +24,12 @@ MESSAGE_DELIMITER: Final[bytes] = b"\n"
 # limit — asyncio.start_server(limit=...) and asyncio.open_connection(limit=...).
 STREAM_LIMIT: Final[int] = 16 * 1024 * 1024
 
+# Room left for the envelope a payload travels inside — type, timestamps, ids,
+# field names and JSON escaping. Anything sizing itself against the stream limit
+# should budget against (STREAM_LIMIT - this), not against the limit itself, or
+# a payload that "just fits" produces a line that does not.
+STREAM_OVERHEAD_ALLOWANCE: Final[int] = 64 * 1024
+
 # ---------------------------------------------------------------------------
 # Timing, in seconds — README "Data Collection Intervals"
 # ---------------------------------------------------------------------------
@@ -103,6 +109,17 @@ PAUSE_MAX_SECONDS: Final[int] = 3600
 
 # How long before a pause lapses that the Admin GUI starts warning.
 PAUSE_WARN_SECONDS: Final[int] = 300
+
+# Any single continuous scheduled block is capped at this. A safety timeout
+# against the *overlay's* own failure modes — a hang or a rendering fault
+# leaving the screen stuck — not a response to losing the network, since
+# enforcement is entirely local and needs no Engine.
+#
+# Note this is a different kind of cap from PAUSE_MAX_SECONDS above, which
+# guards against the *admin* vanishing. Shared here rather than living in
+# client.lockout so the Admin GUI can warn with the same number the client
+# silently enforces.
+MAX_BLOCK_HOURS: Final[int] = 2
 
 # Overlay presentation modes. "scheduled" shows the countdown a time-based
 # restriction has; "pause" deliberately shows none.
@@ -201,6 +218,24 @@ VALID_SCRIPT_TYPES: Final[frozenset[str]] = frozenset({
     SCRIPT_TYPE_PYTHON,
     SCRIPT_TYPE_POWERSHELL,
 })
+
+# Commands worth replaying to a client that was offline when they were issued.
+#
+# These declare *state the client should converge to*, so delivering one late is
+# still correct. Everything else is a point-in-time action — a SCREEN_CAPTURE or
+# SHOW_DIALOG replayed twenty minutes after the operator asked for it is not a
+# recovered command, it is a surprise. SET_PAUSE is deliberately excluded too:
+# the client already persists pause state across a reboot, so replaying it would
+# re-freeze a machine the pause had legitimately lapsed on.
+DURABLE_COMMANDS: Final[frozenset[str]] = frozenset({
+    MSG_SET_WEBSITE_POLICY,
+    MSG_SET_APP_BLACKLIST,
+    MSG_SET_TIME_RESTRICTION,
+})
+
+# A trace id arriving from a peer is echoed back in logs and relayed onward, so
+# it is bounded on arrival rather than trusted.
+MAX_TRACE_ID_LENGTH: Final[int] = 64
 
 STATUS_SUCCESS: Final[str] = "success"
 STATUS_ERROR: Final[str] = "error"

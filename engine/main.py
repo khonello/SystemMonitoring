@@ -35,7 +35,7 @@ from engine.auth import (
     log_auth_state,
     verify_challenge_response,
 )
-from engine.command_handler import process_message
+from engine.command_handler import flush_outbox, process_message
 from engine.config import (
     CLIENT_HEARTBEAT_TIMEOUT,
     LOG_LEVEL,
@@ -224,6 +224,13 @@ async def handle_client(
             writer,
             create_message(MSG_REGISTER_ACK, {"status": "success"}, client_id=peer_id),
         )
+
+        # After the ack, so the client is already in its command loop and will
+        # read what arrives. Anything held while it was away goes out before its
+        # first heartbeat, which is what makes a machine that missed a policy
+        # change converge on reconnect rather than at the operator's next try.
+        if role == ROLE_CLIENT:
+            await flush_outbox(peer_id)
 
         shutdown = _get_shutdown()
         while not shutdown.is_set():

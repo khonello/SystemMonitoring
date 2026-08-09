@@ -2,7 +2,7 @@
 
 PHASE 1 SCAFFOLD — the handshake's *motions* are real (the Engine issues a
 nonce, the peer answers, the answer is checked) but `verify_challenge_response`
-is a stub that accepts anything. Phase 6 replaces that single function body
+is a stub that accepts anything. Phase 7 replaces that single function body
 with real HMAC verification; no message shape and no call site changes.
 That is the whole point of scaffolding it now (README "Scaffolding Auth:
 Motions First, Logic Last").
@@ -37,7 +37,7 @@ def generate_nonce() -> str:
     """Generate a fresh challenge nonce.
 
     Real now rather than stubbed: a nonce only has to be unpredictable and
-    single-use, neither of which depends on the Phase 6 key material.
+    single-use, neither of which depends on the Phase 7 key material.
     """
     return secrets.token_hex(NONCE_BYTES)
 
@@ -48,7 +48,7 @@ def verify_challenge_response(client_id: str, nonce: str, response: str) -> bool
     PHASE 1 STUB: accepts anything, so the handshake round-trip can be
     exercised during integration testing before key material exists.
 
-    Phase 6 replaces the body with:
+    Phase 7 replaces the body with:
         derived_key = hmac.new(master_secret, client_id.encode(), sha256).digest()
         expected = hmac.new(derived_key, nonce.encode(), sha256).hexdigest()
         return hmac.compare_digest(expected, response)
@@ -64,7 +64,7 @@ def verify_challenge_response(client_id: str, nonce: str, response: str) -> bool
         True if the peer may register as client_id.
     """
     logger.debug(
-        "Auth stub accepting %s (response=%r) - real check lands in Phase 6",
+        "Auth stub accepting %s (response=%r) - real check lands in Phase 7",
         client_id,
         response[:16],
     )

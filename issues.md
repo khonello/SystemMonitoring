@@ -7,15 +7,24 @@ This is not the roadmap. Work that is merely scheduled for a later phase lives
 in [todo.md](todo.md); an item only belongs here if it would still be a problem
 after its phase is finished, or if it blocks a phase from starting.
 
-**[Section A](#a--needs-your-decision) needs your decision** — those cannot be
-resolved by writing code. Sections B and C are engineering work.
+Four sections, and the difference between the last two matters:
 
-Phases 0–4 are complete apart from packaging. Resolved items stay in section B
-rather than being deleted, so the reasoning behind each decision survives.
+| | |
+|---|---|
+| **[A](#a--needs-your-decision)** | Needs your decision — policy and approvals, not code |
+| **[B](#b--resolved)** | Resolved, kept so the reasoning survives |
+| **[C](#c--still-open-scheduled-work)** | Not finished. Each has a phase |
+| **[D](#d--accepted-limitations)** | Deliberately not being built, with what would change that |
 
-**Currently blocking: nothing.** A5 is fully answered (see B11) and packaging
-is unblocked — what remains there is build work, not a decision. Everything
-left in section A is policy you can settle at any point before deployment.
+Section D exists so a considered decision is never mistaken for a gap nobody
+noticed. If you are wondering "why doesn't it do X", look there before
+assuming X was overlooked.
+
+Phases 0–4 are complete. Packaging moved to Phase 8 (see C2), and Phase 5 is
+manual per-system verification.
+
+**Currently blocking: nothing.** Everything left in section A is policy you can
+settle at any point before deployment.
 
 ---
 
@@ -54,13 +63,13 @@ Nothing in the code depends on this; it gates where you are allowed to run it.
 
 ### A3. How the master secret and per-client keys get onto machines
 
-Phase 6 needs `client_key = HMAC(master_secret, client_id)` baked into each
+Phase 7 needs `client_key = HMAC(master_secret, client_id)` baked into each
 client's install package. The README describes the scheme but not the
 operational process: where the master secret is generated, how it is stored so
 it is not lost, and how per-machine keys reach 50 lab computers.
 
 This is a deployment process question rather than a coding one, and it shapes
-what Phase 6 actually has to build. Related: A6.
+what Phase 7 actually has to build. Related: A6.
 
 *(A4 is answered — TLS was brought into scope and implemented. See
 [B12](#b12-transport-encryption--done).)*
@@ -73,12 +82,12 @@ The README says the admin holds *the master secret itself*, while each client
 gets a derived key. The implemented handshake does not distinguish them: an
 admin registers and answers the nonce challenge exactly like a client.
 
-For Phase 6 that leaves a genuine design question — should an admin prove
+For Phase 7 that leaves a genuine design question — should an admin prove
 possession of the master secret directly, or be issued a derived key like any
 other peer? The second is simpler and safer (a compromised admin workstation
 does not burn the whole fleet), but it departs from what the README describes.
 
-Not urgent, but decide before Phase 6 rather than during it.
+Not urgent, but decide before Phase 7 rather than during it.
 
 ---
 
@@ -91,7 +100,7 @@ an Admin GUI send traffic, so an operator reading a dashboard was disconnected
 after a minute.
 
 **Fixed** by giving the Admin GUI its own heartbeat task on the same 15s
-interval a Client Agent uses (`admin_gui/connection.py`, `_heartbeat`). One
+interval a Client Agent uses (`admin/connection.py`, `_heartbeat`). One
 uniform liveness rule was preferred over a per-role timeout: the alternative
 means two timeouts to reason about, and an admin that has genuinely crashed
 should still be reaped.
@@ -164,7 +173,7 @@ Phase 4 monitors.
 ### B7. README contradicted the Qt binding in use — **DONE**
 
 The Deployment section now says `pip install PySide6 qasync` and uses
-`python -m admin_gui.main`.
+`python -m admin.main`.
 
 ### B12. Transport encryption — **DONE** (this was A4 and C3)
 
@@ -203,8 +212,289 @@ the agent's own connect path.
 
 **Still true**: the private key is a secret to protect, and a compromised
 Engine certificate means redistributing to every machine. That is the same
-operational shape as the Phase 6 master secret, so it folds into the same
+operational shape as the Phase 7 master secret, so it folds into the same
 install step rather than adding a new one.
+
+### B13. Message flow was implicit, and unobservable when it broke — **DONE**
+
+Every telemetry handler ended in the same two steps — store it, then push it to
+the admins — but that pattern was only ever written out longhand inside each
+handler. Nothing stated the contract, so the only way to learn where an
+`APP_DATA` went was to read its function body, and when an admin stopped seeing
+a client's data there was no way to distinguish "never arrived" from "arrived,
+stored, and the relay failed".
+
+**Fixed** by splitting mechanism from policy. `engine/routing.py` runs a flow —
+role check, persist, handler, relay — and logs every hop under one `trace_id`.
+`_ROUTES` in `engine/command_handler.py` declares, in one table, which flow each
+message type is on and which roles may send it.
+
+Decisions worth keeping:
+
+- **A table, not a framework.** Stages are not registrable, there is no
+  middleware chain, and flows do not compose. Three fixed steps in a fixed order
+  cover every message this protocol has, and a debugger stepping through
+  `dispatch` lands in real code rather than in an abstraction. The goal was
+  making failures explicable; indirection works against that.
+- **Roles moved into the table.** The old code special-cased `ADMIN_COMMAND`
+  outside the handler dict purely so its sender could be checked. Now every
+  route carries `senders`, which closed two gaps nobody had noticed: a client
+  could request reports and the client roster, and an admin could send
+  `APP_DATA` that would be stored as though a client had reported it.
+- **A failed persist still relays.** Losing a sample to a storage fault should
+  not also blank the operator's live view.
+- **Trace ids are distinct from command ids.** A `command_id` names a script
+  execution; a trace names one message's passage. Telemetry has no `command_id`,
+  which is exactly why an unrelayed `APP_DATA` was previously untraceable. An
+  inbound trace is honoured so a client that stamps its own messages gets one id
+  spanning both components — and length-bounded on arrival, since it is
+  peer-supplied text that ends up in every log line.
+
+### B14. Relay failures were silently discarded — **DONE** (found during B13)
+
+Not previously logged. `_relay_to_admins` ignored the return value of every
+send, so an admin whose socket had gone away simply stopped receiving telemetry
+with nothing anywhere recording it. The Engine reported success either way.
+
+**Fixed** — `routing.relay` counts failures, logs them against the trace id with
+the peer ids that missed out, and returns the delivered count. Partial delivery
+is explicitly tested: one dead admin must not stop the others being served.
+
+### B15. A command for an offline client vanished — **DONE**
+
+`send_command_to_client` marked the row `undeliverable` and gave up. For a
+policy change that is wrong: a machine switched off during an exam setup came
+back with none of the restrictions that had been applied to the room.
+
+**Fixed** with a durable outbox, subject to one distinction that does the real
+work here — **only commands whose replay is still correct are queued.**
+`DURABLE_COMMANDS` (`SET_WEBSITE_POLICY`, `SET_APP_BLACKLIST`,
+`SET_TIME_RESTRICTION`) declare state the client should converge to, so
+delivering one late is right. A `SCREEN_CAPTURE` or `SHOW_DIALOG` replayed
+twenty minutes after the operator asked for it is not a recovered command, it is
+a surprise; those still fail as before.
+
+- **No outbox table.** A queued command is a `command_log` row whose status says
+  it has not gone out, so the queue and the audit trail cannot disagree and
+  retention prunes both at once.
+- **Newer supersedes older, per type.** Replaying three successive blacklist
+  updates achieves nothing the last one does not. This also bounds the queue to
+  one row per durable type, which is why there is no separate size cap.
+- **`SET_PAUSE` is deliberately excluded.** The client already persists pause
+  state across a reboot, so replaying it would re-freeze a machine whose pause
+  had legitimately lapsed — turning the admin safety net inside out.
+- **Marked dispatched only after the write succeeds**, so a client that drops
+  mid-flush keeps the rest queued rather than losing them to an optimistic
+  status update.
+- **A durable broadcast also reaches known-but-offline clients.** "Apply this
+  policy to the lab" should mean the whole lab, not the machines that happened
+  to be switched on.
+
+Staleness is bounded by `ENGINE_OUTBOX_TTL`, default 24 hours.
+
+### B16. Time restrictions were unreachable from the Admin GUI — **DONE** (this was C11)
+
+The whole lockout-schedule feature had no operator-facing control. Every other
+layer was finished — the Engine routed `SET_TIME_RESTRICTION`, and the client
+enforced it with a tamper-protected schedule, countdown overlay, two watchdogs,
+reboot recovery and the 2-hour cap — but no editor, slot or panel ever sent one.
+It fell between phases: Phase 3 deferred the editor to Phase 4 on the reasoning
+that an editor with no enforcement behind it is UI without behaviour, and Phase
+4 built the enforcement without coming back.
+
+**Fixed** with a "Time restriction" section in `PolicyPanel.qml` plus
+`setTimeRestriction` / `clearTimeRestriction` on the backend.
+
+Decisions worth keeping:
+
+- **One-off windows, not recurring rules.** The client stores a single
+  start/end pair and knows nothing about weekly recurrence, so the editor sends
+  what the client can actually honour. A recurring schedule would be a client
+  feature first and a UI feature second; inventing the wire format here would
+  have produced an editor whose settings silently did nothing.
+- **Duration plus a delay, not two datetimes.** QML has no good datetime entry,
+  and the delay is what the exam case actually needs — set the lockout up
+  beforehand and let the client's own watchdog raise the overlay when the
+  window opens, with no further contact from the GUI.
+- **The cap is warned about, not enforced here.** The client shortens anything
+  over `MAX_BLOCK_HOURS` and reports the end it stored. Clamping in the GUI too
+  would mean two places to keep in step, so the editor warns and lets the
+  client be authoritative — and `MAX_BLOCK_HOURS` moved to `common.constants`
+  so the warning quotes the same number the client enforces, via a
+  `maxBlockHours` property rather than a literal in QML.
+- **Blocking the whole room asks first.** Locking one machine is recoverable by
+  walking to it; locking the lab is not.
+- **Clearing a block does not touch a pause.** Same precedence the client
+  applies — dropping one must not release a machine the other still holds.
+
+Also removed a stale line in that panel telling the operator enforcement was a
+Phase 4 stub that replies "not implemented". It had been untrue since Phase 4.
+
+### B17. Each system now runs and reports on its own — **DONE**
+
+Prompted by moving packaging last: proving the code works on its target machine
+comes first, and each unit needed to be startable and *observable* without the
+other two. All three were configurable only through environment variables, with
+no way to ask a component what it saw.
+
+**Fixed** with a `cli.py` per package, `python -m engine|client|admin` as the
+CLI entry points, and `labmonitor.py` dispatching to all three plus the helpers.
+
+- **Why not argparse inside the existing `main.py` files.** Every config value
+  is a module-level `Final` read from `os.environ` **at import time**, and
+  `main.py` imports those constants at module level, so a flag cannot be applied
+  by setting an attribute afterwards — consumers have already bound the value.
+  `tests/conftest.py` documents the same trap from the other direction. The
+  order that works is parse → write to `os.environ` → *then* import, which is
+  why the parsers sit in their own modules and import `main` inside `run()`.
+  A consequence worth keeping: the three `main.py` files were not touched, and
+  `python -m engine.main` still works exactly as before.
+- **Every flag maps onto an existing environment variable** rather than
+  introducing a second configuration mechanism. The variable still works alone.
+- **`engine/cli.py` imports only argparse, os and sys**, so a Linux Engine
+  install still pulls nothing.
+- **The launcher imports each component lazily**, inside the branch that needs
+  it — a top-level import would drag PySide6 into `labmonitor.py engine`.
+
+The diagnostics are the point of the exercise: `engine --check` (config, TLS
+posture, prepares the database, does not bind the port), `client --once` (one
+real collection cycle, no Engine, no sockets), `client --check` (config, local
+state, which bundled pieces are absent) and `admin --check-qml` (loads every QML
+file offscreen, renders nothing).
+
+`--check-qml` calls `os._exit` once it has reported. Ordinary interpreter
+shutdown frees the `Backend` while QML still holds bindings to it, producing
+null-model errors that look like panel faults but are an artefact of shutting
+down — leaving that noise in would make the check untrustworthy for the thing it
+exists to detect.
+
+### B18. `STREAM_LIMIT` never exercised — **DONE** (this was C7)
+
+Both ends open with a 16MB limit because asyncio caps a line at 64KiB, but
+nothing had ever sent a message near either bound, so neither the working case
+nor the failure mode had been observed.
+
+**Both halves are now covered**, because the risk was never just "does a big
+message work" — it was that an oversized one surfaces as an unrelated-looking
+stream error with nothing in it naming the cause.
+
+- **Product fix**: `capture_screen` already knew the encoded size and never
+  checked it. It now refuses a capture over `STREAM_LIMIT` minus a new
+  `STREAM_OVERHEAD_ALLOWANCE` (64KB of envelope room), with a message naming the
+  size and suggesting a lower quality — rather than handing the framing
+  something that costs the agent its whole connection.
+- **Tests**: a 4MB payload round-tripping client → Engine → admin through the
+  real framing, an oversized line proving the Engine fails closed rather than
+  leaving the peer hanging, and the client-side refusal.
+
+Sizing against the limit *minus* an allowance matters: a payload that exactly
+fits produces a line that does not, once the envelope is added.
+
+### B19. `docs/` was empty — **DONE** (this was C8)
+
+`docs/protocol.md`, `docs/installation.md` and `docs/user_manual.md` are
+written. `installation.md` states plainly that packaging does not exist and
+names the three interpreter fallbacks, so nobody mistakes a from-source setup
+for a deployment.
+
+### B20. The app blacklist was unreachable from the GUI — **DONE** (this was C12)
+
+The same defect as B16, one panel over: the "Applications" group box called
+`terminateProcess`, a one-shot kill, and nothing sent `SET_APP_BLACKLIST`.
+
+**Fixed** with a `setAppBlacklist` slot shaped like `setWebsitePolicy`, and a
+list field in the policy panel.
+
+- **The one-shot kill stayed**, moved into its own "Terminate one process now"
+  box. Killing a process once and maintaining a standing list are different
+  actions and both are wanted; the old panel conflated them under one title.
+- **An empty list is a real instruction** — it clears the blacklist — so the
+  Apply button is not disabled on empty input the way the website editor's is.
+- Payload key is `process_names`, matching what `client/policy.set_app_blacklist`
+  reads. A test asserts the exact payload, since a mismatch here would fail
+  silently at the far end.
+
+### B21. Client local state was per-machine, not per-client — **DONE** (this was C13)
+
+`--id` changed the identity a client registered under, but `STATE_DIR` was
+`%ProgramData%\SystemMonitoring` with no client id in it. Several agents on one
+box shared one lockout schedule, one pause file and one cached blacklist,
+overwriting each other — which made Phase 6's "10+ clients" item impossible to
+simulate for anything that *enforces*.
+
+**Fixed**: `STATE_DIR` is now `STATE_ROOT / state_component(CLIENT_ID)`.
+
+Three things this turned up that were not obvious going in:
+
+- **`CLIENT_ID` reaches the path unvalidated.** It comes from the environment,
+  so joining it raw would let `../../Windows` escape the state root entirely.
+  It is sanitised to one safe path component.
+- **Sanitising alone reintroduces the bug it fixes.** It is lossy: `lab1/pc-01`
+  and `lab1_pc-01` both reduce to the same name, silently reuniting two
+  machines' state. A short SHA-256 suffix of the *original* id restores
+  distinctness and is stable across runs.
+- **The watchdog would have failed open** — the serious one. It runs from a
+  Scheduled Task as SYSTEM, which inherits nothing from the agent, so it would
+  have re-derived a *different* client id, resolved a different directory,
+  found no schedule, and released a machine that should still be blocked. In
+  the one component whose entire job is to fail closed. `client/watchdog.py`
+  now takes `--id`, applied to the environment before `client.config` is
+  imported, and `install_service.py` bakes the id into both the service and the
+  task command lines rather than leaving either to re-derive it. The same gap
+  existed for the service command and is closed the same way.
+
+ACLs moved from the per-client directory to `STATE_ROOT`, with the
+object- and container-inherit flags, so a client directory created later is
+protected the moment it appears instead of depending on the installer having
+been run for that client.
+
+**Not fixed, and not fixable this way**: two agents on one machine both entering
+a block window still launch competing fullscreen overlays on the same physical
+display. Separate state does not buy a separate screen. So one box can now
+simulate many clients for telemetry, policy and reporting — but enforcement
+still needs real separate machines.
+
+### B22. Stale references left by the rename and the phase renumber — **DONE**
+
+Swept deliberately rather than found by accident, after two changes that touch
+text everywhere: `admin_gui` → `admin`, and the phase renumber that moved auth
+to 7 and packaging to 8. Recorded because most of these were invisible to the
+test suite — nothing asserts on a comment or a placeholder string.
+
+- **`.gitignore` still ignored `admin_gui/runtime/`.** The rename swept `.py`,
+  `.qml`, `.md` and `.toml`; it did not sweep dotfiles. A bundled runtime in
+  `admin/runtime/` would have been committed.
+- **A stale string the operator could see.** `MonitoringPanel.qml` told them
+  "The client's process monitor is a Phase 4 stub" when the panel was empty. It
+  has not been a stub since Phase 4 closed — the same class of mistake as the
+  policy panel's "not implemented" note removed in B16. Now says the client
+  sends a batch every 30 seconds.
+- **~12 comments still said "Phase 6" for authentication and "Phase 4
+  packaging step".** Corrected across `engine/auth.py`, `client/auth.py`,
+  `admin/connection.py`, `common/tls.py`, `client/config.py`,
+  `client/lockout.py` and the tests.
+- **`tests/test_integration.py` still described itself as Phase 1 scaffold
+  smoke tests** that expect "not implemented" replies. It now carries TLS,
+  outbox and stream-limit coverage. One comment inside it claimed a reply was
+  the old stub when the client genuinely runs the command and reports that no
+  such process exists.
+- **Issue references in code pointed at numbers that had moved** (C7, C13)
+  after those items were resolved into section B.
+
+The general lesson, worth keeping: a rename or a renumber is a code change the
+tests cover and a *prose* change nothing covers. Grep for the old token in every
+file type, not just the ones the compiler reads.
+
+### B23. `scripts/` was not an installed package — **DONE**
+
+`pyproject.toml` listed `common`, `engine`, `client`, `client.monitors` and
+`admin`, but not `scripts` — despite `python -m scripts.generate_cert` being
+the documented way to produce the Engine's TLS certificate, and
+`labmonitor.py certs` importing it.
+
+It worked in every test because pytest runs from the repo root, which puts
+`scripts/` on `sys.path` regardless. It would have failed the moment anyone ran
+the documented command from anywhere else. Added to the package list.
 
 ### B11. Script import policy — **DONE** (this was A5)
 
@@ -307,7 +597,12 @@ turned into the whole test suite hanging rather than one test failing.
 
 ---
 
-## C — Still open
+## C — Still open: scheduled work
+
+Things that are *not finished*. Each has a phase. Contrast with
+[section D](#d--accepted-limitations), which is work deliberately not
+being done — the split exists so a considered decision is never mistaken
+for a gap nobody noticed.
 
 ### C1. Authentication is a stub that accepts anything — *critical*
 
@@ -318,13 +613,22 @@ means an attacker's connection is private too. This is still the blocker.)*
 both the client and the admin answer with a fixed placeholder string. The
 handshake's *motions* are real and exercised; its *verification* is not.
 
-This is the intended Phase 6 sequencing, not an accident — but the current
+This is the intended Phase 7 sequencing, not an accident — but the current
 build authenticates nobody. Anyone on the LAN can register as any client, or as
 an admin, and issue commands.
 
-**Run it only on an isolated or trusted network until Phase 6.**
+**Run it only on an isolated or trusted network until Phase 7.**
 
-### C2. Bundled Python packaging — *unblocked, still to be built*
+### C2. Bundled Python packaging — *unblocked, deferred to Phase 8*
+
+**Now scheduled last, deliberately.** Packaging code that has never been proven
+on its target machine is the wrong order of work, and this has no design risk
+left in it — so it gains least from being early and blocks nothing. Phase 5 now
+exists to prove each system by hand first.
+
+The cost of that ordering, stated plainly: Phase 5 exercises the *fallback*
+paths listed below, not the shipped ones, so its results do not fully transfer.
+Phase 8 carries a re-verification of the same ground.
 
 **No longer waiting on a decision.** A5 is answered (B11): scripts are stdlib
 and `subprocess` only, so the **embeddable distribution** is sufficient for the
@@ -333,7 +637,7 @@ script-execution runtime, and the import policy now enforces that.
 What remains is the build work itself, not a choice:
 
 Three fallbacks are live because the bundle does not exist yet, each logging a
-warning: `admin_gui/validation.py` and `client/executor.py` both fall back to
+warning: `admin/validation.py` and `client/executor.py` both fall back to
 the running interpreter, and `client/lockout.py` runs the overlay as a module
 instead of an executable. All three are development conveniences, not shippable.
 
@@ -353,21 +657,6 @@ The two concerns stay independent, which is what keeps A5 answerable:
 
 Build both helpers as **one** binary with a mode flag, so the Qt payload is
 paid for once rather than twice.
-
-### C9. Whitelist mode cannot be fully expressed in a hosts file — *new, from Phase 4*
-
-Website filtering rewrites the hosts file. That works cleanly for blacklist
-mode, which is the documented default. Whitelist mode is a poorer fit: a hosts
-file has no "deny everything except" entry, so what actually gets written is
-the set of domains the Engine listed as *not* permitted.
-
-For the exam-session use case the README describes, that means the Engine has
-to send a meaningful blocklist rather than just the allowed domain. A local
-proxy would express whitelist properly and filter by URL path, at the cost of
-shipping and supervising another service on every lab machine.
-
-Also inherent to the hosts-file approach: it matches whole domains only, and a
-browser using DNS-over-HTTPS bypasses it entirely.
 
 ### C10. Task Manager hardening is unverified on a managed machine — *narrowed*
 
@@ -408,7 +697,99 @@ registration are covered by integration tests. What remains untested is
 behaviour with real key material and a verifier that can actually reject.
 Budget testing time for the first enablement.
 
-### C5. The Engine relays every client's telemetry to every admin — *new, from Phase 3*
+### C6. Client RAM footprint (<50MB) unverified
+
+The README's own non-functional requirement, which it flags as predating the
+bundled runtime and the helper executables. Those are spawned on demand rather
+than resident, so idle footprint may still be close to the estimate — but it
+has never been measured. Measure in Phase 6 rather than restating the number.
+
+---
+
+## D — Accepted limitations
+
+**Deliberate decisions not to build something, recorded so they are not
+mistaken for oversights.** Nothing here is scheduled. Each entry says what was
+decided, why, and — most usefully — *what would change the answer*, so a future
+reader can tell whether the reasoning still holds rather than re-deriving it.
+
+Where an item was previously logged as an open issue, its old number is kept.
+
+### D1. Storage stays relational; SQLite now, PostgreSQL if it grows
+
+A document database was considered and rejected. The data is the wrong shape
+for it: application samples, network counters and USB events are narrow,
+fixed-field and uniform — the textbook relational/time-series case — and the
+queries that matter are the ones document stores handle worst.
+`get_weekly_network_summary` differences cumulative counters with
+`LAG(...) OVER (PARTITION BY day ORDER BY timestamp)`; the equivalent is either
+a window-function feature not every document store has, or pulling rows into
+Python and looping.
+
+Three costs specific to this project:
+
+- The Engine is **standard-library only by design**, and `sqlite3` is in the
+  standard library. Any document store adds a service to install, supervise,
+  back up and secure on the Engine box, plus a driver — a new deployment
+  surface, not a code change.
+- Writes are **synchronous on the event loop by measurement** (5–8ms, ~3.5%
+  duty cycle). A network hop to a database server invalidates that measurement
+  and the design resting on it.
+- At ~230k rows/day/client, per-document field-name overhead makes a document
+  store *larger* than fixed rows, and the batched retention prune (B3) would be
+  rewritten from scratch.
+
+The one honest argument for documents is schema variability, and there is
+exactly one variable field — `command_data` — already stored as JSON in a TEXT
+column and queryable with SQLite's JSON1 if it ever needs to be.
+
+**What would change this**: sustained write volume that the benchmark shows the
+event loop can no longer absorb, or genuinely heterogeneous telemetry. The
+answer then is the documented PostgreSQL path (all SQL is in `engine/database.py`,
+so it stays a rewrite of one module) or rollup tables aggregating `app_logs`
+into daily summaries — not a document model.
+
+### D2. No per-client tables or collections
+
+Partitioning storage per client was considered. `client_id` plus the existing
+composite indexes already give that access path, and per-client partitioning
+would break every fleet-wide aggregate — which is most of what the reports do.
+
+**What would change this**: nothing at this scale. At a scale where it might,
+partitioning is a PostgreSQL feature rather than a schema redesign.
+
+### D3. No client → Engine → same-client flow
+
+There is no flow where a client's own telemetry comes back to it as an action.
+The obvious candidate — terminating a blacklisted application — is already
+enforced **locally** by the agent on its collection cycle, which is strictly
+better: local polling beats a 30-second round trip, and it keeps working when
+the Engine is unreachable.
+
+**What would change this**: a rule the client genuinely cannot decide alone.
+Three plausible ones, none currently required — a network quota (the client
+only has counters cumulative since boot and cannot compute real 24h usage,
+`get_network_summary` can), a cross-client rule ("no more than N machines
+running X"), or a history-based rule ("third attempt this week"). Build the
+flow when one of those is actually wanted, not before; D4 explains why the
+routing table makes that cheap.
+
+### D4. The Engine stays stateless per message
+
+The Engine does not orchestrate multi-hop sequences. Script execution looks
+like admin → client → admin → client, but the admin drives the second hop; the
+Engine routes each message independently and remembers nothing between them.
+
+That is why adding a command type is one row in `_ROUTES`. Making the Engine
+own such sequences means per-command state machines in it, which is a large
+change with real value only if flows must be *enforced* rather than driven by
+the operator.
+
+**What would change this**: a requirement that a sequence complete without an
+admin present — an automatic escalation, or a multi-step remediation that has
+to finish even if the console closes.
+
+### D5. Every admin receives every client's telemetry (was C5)
 
 Live dashboard updates are push-based: `APP_DATA`, `NETWORK_DATA` and
 `USB_EVENT` are forwarded to all connected admins, which then buffer per client
@@ -420,26 +801,67 @@ a LAN at project scale, and the admin bounds its own buffers
 (`MAX_LIVE_SAMPLES`), but it does not scale gracefully.
 
 The fix, if it ever matters, is a subscription: the admin tells the Engine
-which client it is watching, and only that client's telemetry is relayed.
+which client it is watching, and only that client's telemetry is relayed. That
+is now a change to one route's `relay_to` in `_ROUTES` plus a subscription
+registry, rather than an edit to three handlers (B13).
 
-### C6. Client RAM footprint (<50MB) unverified
+Unchanged in scale, but no longer unobservable: `routing.relay` reports what it
+delivered and to whom it failed, so the cost of this fan-out is at least
+measurable before anyone decides whether it needs fixing.
 
-The README's own non-functional requirement, which it flags as predating the
-bundled runtime and the helper executables. Those are spawned on demand rather
-than resident, so idle footprint may still be close to the estimate — but it
-has never been measured. Measure in Phase 5 rather than restating the number.
+### D6. Whitelist filtering is approximated, not expressed (was C9)
 
-### C7. `STREAM_LIMIT` never exercised by a large payload
+Website filtering rewrites the hosts file. That works cleanly for blacklist
+mode, which is the documented default. Whitelist mode is a poorer fit: a hosts
+file has no "deny everything except" entry, so what actually gets written is
+the set of domains the Engine listed as *not* permitted.
 
-Both ends are opened with a 16MB limit because asyncio's `StreamReader` caps a
-line at 64KiB by default. Nothing has yet sent a message near either bound.
+For the exam-session use case the README describes, that means the Engine has
+to send a meaningful blocklist rather than just the allowed domain. A local
+proxy would express whitelist properly and filter by URL path, at the cost of
+shipping and supervising another service on every lab machine.
 
-The first real test is base64 screen capture in Phase 4. A screenshot exceeding
-16MB would surface as an unrelated-looking stream error, so exercise this
-deliberately with a large capture rather than discovering it in the field.
+Also inherent to the hosts-file approach: it matches whole domains only, and a
+browser using DNS-over-HTTPS bypasses it entirely.
 
-### C8. `docs/` is empty
+### D7. Time restrictions are one-off windows, not recurring rules
 
-The README lists `docs/protocol.md`, `docs/installation.md` and
-`docs/user_manual.md`. These are Week 4 deliverables in its own timeline; noted
-so the empty directory is not mistaken for an oversight.
+The schedule editor (B16) sends a single start/end pair, because that is what
+the client stores. It has no notion of weekly recurrence.
+
+This was the deciding constraint: inventing a recurring wire format the client
+cannot honour would produce an editor whose settings silently did nothing.
+Recurrence is a client feature first — `client/lockout.py` would need to hold a
+rule set and evaluate it — and a UI feature second.
+
+**What would change this**: wanting "every weekday 09:00–10:00" without an
+operator setting it each morning. Start in `client/lockout.py`, not the GUI.
+
+### D8. One machine cannot simulate many *enforcing* clients
+
+State is now per client (B21), so several agents on one box no longer overwrite
+each other's lockout schedule, pause file or blacklist. What separate state does
+not buy is a separate **screen**.
+
+Two agents on one machine both entering a block window each launch a fullscreen
+overlay on the same physical display. They fight: both re-assert topmost every
+500ms, and whichever wins is arbitrary. The same applies to the warning dialog.
+
+So the honest boundary for Phase 6's "10+ clients, ceiling 50":
+
+| Simulatable on one box | Needs real separate machines |
+|---|---|
+| Heartbeats, registration, capacity caps | Lockout overlays |
+| `APP_DATA`, `NETWORK_DATA`, `USB_EVENT` | Pause and resume |
+| Reports and aggregation | Task Manager hardening (also C10) |
+| The command audit trail and outbox | Anything a student would *see* |
+| Policy dispatch and the hosts file* | |
+
+\* One hosts file per machine, so several agents writing website policy will
+also collide — the managed-block markers mean the last writer wins rather than
+the file being corrupted, but it is still one shared resource.
+
+**What would change this**: nothing worth building. Per-client virtual desktops
+or a headless enforcement mode would be substantial work whose only consumer is
+a test harness, and it would mean the thing under test is no longer the thing
+that ships. Use real machines, or VMs, for the enforcement half.

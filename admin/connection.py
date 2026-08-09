@@ -16,7 +16,7 @@ import logging
 import ssl
 from typing import Any, Awaitable, Callable
 
-from admin_gui.config import ADMIN_ID, TLS_CERT_PATH, TLS_ENABLED
+from admin.config import ADMIN_ID, TLS_CERT_PATH, TLS_ENABLED
 from common.constants import (
     HEARTBEAT_INTERVAL,
     MSG_ADMIN_COMMAND,
@@ -193,7 +193,7 @@ class EngineConnection:
 
         if reply.get("type") == MSG_REGISTER_CHALLENGE:
             # Admins answer the same nonce challenge clients do. The response
-            # is a Phase 1 placeholder on both sides; Phase 6 makes it real.
+            # is a Phase 1 placeholder on both sides; Phase 7 makes it real.
             nonce = get_payload(reply).get("nonce", "")
             if not await self.send(
                 create_message(

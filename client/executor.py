@@ -15,7 +15,6 @@ import asyncio
 import base64
 import io
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -27,6 +26,8 @@ from client.config import BUNDLED_PYTHON_PATH, CLIENT_ID, SCRIPT_LOG_DIR
 from common.constants import (
     DEFAULT_SCRIPT_TIMEOUT,
     MAX_SCRIPT_TIMEOUT,
+    STREAM_LIMIT,
+    STREAM_OVERHEAD_ALLOWANCE,
     MSG_COMMAND_ACCEPTED,
     MSG_COMMAND_COMPLETE,
     MSG_COMMAND_OUTPUT,
@@ -443,6 +444,24 @@ async def capture_screen(quality: int = 80) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - reported, not swallowed
         logger.exception("Screen capture failed")
         return {"status": STATUS_ERROR, "message": f"Capture failed: {exc}"}
+
+    # Refused here rather than handed to the framing. A line over STREAM_LIMIT
+    # makes asyncio's reader raise mid-stream, which costs the peer its whole
+    # connection and surfaces as an unrelated-looking stream error — nothing in
+    # it says "the screenshot was too big". Better to fail with the reason.
+    budget = STREAM_LIMIT - STREAM_OVERHEAD_ALLOWANCE
+    if len(encoded) > budget:
+        logger.error(
+            "Capture of %dx%d is %d bytes encoded, over the %d byte message budget",
+            width, height, len(encoded), budget,
+        )
+        return {
+            "status": STATUS_ERROR,
+            "message": (
+                f"Capture is {len(encoded) / 1024 / 1024:.1f}MB encoded, over the "
+                f"{budget / 1024 / 1024:.0f}MB message limit. Retry at a lower quality."
+            ),
+        }
 
     return {
         "status": STATUS_SUCCESS,

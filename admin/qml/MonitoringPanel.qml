@@ -37,7 +37,7 @@ Item {
             DataList {
                 model: applicationModel
                 emptyText: "No application data received yet.\n" +
-                           "The client's process monitor is a Phase 4 stub."
+                           "Clients send a batch every 30 seconds once connected."
                 primary: function (m) { return m.process_name || "" }
                 secondary: function (m) {
                     return "pid " + (m.pid || "?") + "   " + (m.window_title || "")
