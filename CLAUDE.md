@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, and **`issues.md`** logs known bugs, deferred decisions and unverified claims. Read both before starting a phase — `issues.md` marks which items block which phase.
+Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, and **`issues.md`** logs known bugs, deferred decisions and unverified claims. Read both before starting a phase — `issues.md` marks which items block which phase. **`commands.md`** is the operational CLI reference — every program, its flags, and why the entry points are split the way they are; keep it current when a flag changes, since unlike the README it is meant to track the code.
 
 **`issues.md` section D is "accepted limitations"** — things deliberately not built, each with what would change the decision. Check it before "fixing" something that looks missing: storage staying relational, no per-client partitioning, no client→Engine→same-client flow, the Engine staying stateless per message, telemetry fanning out to every admin, hosts-file whitelist approximation, one-off rather than recurring lockout schedules, and one machine being unable to simulate many *enforcing* clients are all decisions, not gaps.
 
-Phases 0–4 are complete: Engine, Administrator and Client Agent are all implemented and tested (263 tests). **Phase 5, manual per-system verification, is next.** Packaging was moved out of Phase 4 to Phase 8 (dead last) — packaging code that has never been proven on its target machine is the wrong order of work, and no design decisions remain in it. Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are for bringing a machine up, not for shipping, so Phase 5's results do not fully transfer to the packaged build.
+Phases 0–4 are complete: Engine, Administrator and Client Agent are all implemented and tested (270 tests). **Phase 5, manual per-system verification, is next.** Packaging was moved out of Phase 4 to Phase 8 (dead last) — packaging code that has never been proven on its target machine is the wrong order of work, and no design decisions remain in it. Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are for bringing a machine up, not for shipping, so Phase 5's results do not fully transfer to the packaged build.
 
 `issues.md` section A lists decisions only the user can make (retention period, institutional approval, TLS scope). Don't try to resolve those in code.
 
@@ -25,12 +25,12 @@ pip install -r requirements.txt -r requirements-admin.txt -r requirements-client
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                    # 263 tests
+.\.venv\Scripts\python.exe -m pytest -q                    # 270 tests
 .\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common --cov=admin
 .\.venv\Scripts\python.exe -m scripts.bench_database       # SQLite write cost
 ```
 
-**Each unit has its own CLI: `python -m engine`, `python -m client`, `python -m admin`.** `labmonitor.py` dispatches to all three plus the helpers on a dev box. Every flag maps onto an existing env var — the flag exists because config is read at import time, so `<package>/cli.py` writes to `os.environ` *before* importing the component. That is also why the three `main.py` files were left untouched and still work env-only via `python -m <package>.main`. Don't move argparse into them.
+**Each unit has its own CLI: `python -m engine`, `python -m client`, `python -m admin`.** `labmonitor.py` dispatches to all three plus the helpers on a dev box. Every flag maps onto an existing env var — the flag exists because config is read at import time, so `<package>/cli.py` writes to `os.environ` *before* importing the component. That is also why the three `main.py` files were left untouched and still work env-only via `python -m <package>.main`. Don't move argparse into them. Full flag-by-flag reference, including the helper programs: **`commands.md`**.
 
 Diagnostics that need nothing else running — reach for these before debugging an integration:
 
@@ -104,6 +104,8 @@ Wire protocol is newline-delimited JSON over TCP, UTF-8. Every message has `type
 **Scripts are capped at 5 minutes (15 max).** They're an extension mechanism for small routine tasks, not a job runner. This does *not* remove the need for the non-blocking execution model — a 5-minute script stalls the agent just as surely as an infinite one. On Windows a killed script gets no cleanup, so scripts must be safely interruptible.
 
 **Client state is per-client, and out-of-process readers must be told which client.** `STATE_DIR` is `STATE_ROOT / state_component(CLIENT_ID)`, not a bare `%ProgramData%\SystemMonitoring` — otherwise several agents on one box share one lockout schedule and overwrite each other. `CLIENT_ID` arrives from the environment, so it is sanitised to one path component *and* suffixed with a hash of the original: sanitising alone is lossy, and `lab1/pc-01` colliding with `lab1_pc-01` would silently reunite two machines' state. The consequence that bites: a Windows service and a Scheduled Task inherit nothing from the installer's environment, so `install_service.py` bakes `--id` into **both** command lines and `client/watchdog.py` applies it before importing `client.config`. Leave that out and the watchdog resolves a different directory, finds no schedule, and releases a blocked machine — a fail-open in the component whose job is to fail closed.
+
+**One agent per client id, guarded by an OS lock — not a heartbeat file.** `client/single_instance.py` holds an exclusive byte lock on `agent.lock` in `STATE_DIR` for the process's life, acquired in `main()` *before* `lockout.check_on_startup()` — a duplicate that discovered itself later would already have launched a competing overlay. The Engine cannot catch this itself: a second connection for a known peer is indistinguishable from a reconnect, so it replaces the writer and the first agent talks to a dead socket. Two rules not to undo: it is keyed on the **client id**, never the machine, or the multi-client simulation B21 exists for dies; and it returns "proceed" on anything that is not a positive detection of another holder, because refusing to start on an unwritable state directory leaves the machine with nothing enforcing. Don't replace it with a refreshed timestamp and a staleness window — that fails open on crash-restart, when service recovery restarts an agent whose file is still fresh.
 
 **Lockout enforcement fails closed.** The schedule under `%ProgramData%` is HMAC-protected; if validation fails, treat the block as still active. Blocks are capped at 2 hours as a safety timeout against the overlay's own hangs (not against network loss — enforcement is local and doesn't need the Engine). Two independent watchdogs exist because the overlay *and* the agent can each hang: the agent polls every 30s, and an installer-registered Windows Scheduled Task checks every ~5 min. On boot the agent re-reads the schedule before anything else and re-launches the overlay if a block is still active.
 

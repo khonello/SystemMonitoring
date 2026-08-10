@@ -10,12 +10,14 @@ independent and always runs.
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from client import executor, lockout, policy, state
+from client import executor, lockout, policy, single_instance, state
 from client.connection import reconnect_delay
 from client.executor import handle_command, running_scripts, terminate_process
 from client.monitors.network_monitor import collect_network_data
@@ -171,6 +173,110 @@ def test_state_write_is_atomic(tmp_path):
     assert state.read_state("test.json") == {"second": True}
     leftovers = list((tmp_path / "state").glob("*.tmp"))
     assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
+# Single-instance guard
+# ---------------------------------------------------------------------------
+
+# Locks the same byte the guard does, without importing the client — the point
+# is to prove the *operating system* releases it, so the child must not share
+# any cleanup path with the code under test.
+_HOLDER_SOURCE = """
+import os, sys, time
+handle = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR)
+if sys.platform == "win32":
+    import msvcrt
+    msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
+else:
+    import fcntl
+    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+print("locked", flush=True)
+time.sleep(30)
+"""
+
+
+@pytest.fixture(autouse=True)
+def release_instance_lock():
+    """The guard holds a module-level handle; don't leak it between tests."""
+    yield
+    single_instance.release()
+
+
+def test_lock_lives_in_the_per_client_state_directory():
+    assert single_instance.lock_path().parent == state.STATE_DIR
+
+
+def test_acquire_succeeds_when_nothing_is_running():
+    assert single_instance.acquire() is True
+    assert single_instance.lock_path().exists()
+
+
+def test_acquire_is_refused_while_another_handle_holds_the_lock():
+    """A second agent under the same client id must not start."""
+    state.ensure_state_dir()
+    other = os.open(single_instance.lock_path(), os.O_CREAT | os.O_RDWR)
+    single_instance._lock(other)
+    try:
+        assert single_instance.acquire() is False
+    finally:
+        single_instance._unlock(other)
+        os.close(other)
+
+    assert single_instance.acquire() is True, "released lock should be takeable"
+
+
+def test_release_allows_a_later_acquire():
+    assert single_instance.acquire() is True
+    single_instance.release()
+    assert single_instance.acquire() is True
+
+
+def test_a_second_call_in_one_process_is_idempotent():
+    assert single_instance.acquire() is True
+    assert single_instance.acquire() is True
+
+
+def test_lock_is_released_when_the_holder_is_killed():
+    """The crash-restart case: a hard kill must not leave the agent locked out.
+
+    This is the whole reason the guard is an OS lock rather than a heartbeat
+    timestamp — an agent killed at T and restarted seconds later has to be able
+    to start, or a crash keeps the machine unenforced.
+    """
+    state.ensure_state_dir()
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLDER_SOURCE, str(single_instance.lock_path())],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        assert single_instance.acquire() is False, "holder is alive"
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
+        holder.stdout.close()
+
+    assert single_instance.acquire() is True, "OS should drop the dead holder's lock"
+
+
+def test_an_unopenable_lock_still_lets_the_agent_start(monkeypatch):
+    """Fail open on environment problems, closed only on a real duplicate.
+
+    Refusing to start because the lock file could not be opened would leave the
+    machine with no agent enforcing anything — worse than the duplicate this
+    guards against.
+    """
+    real_open = os.open
+
+    def refuse_the_lock(path, *args, **kwargs):
+        if str(path).endswith(single_instance.LOCK_FILE):
+            raise PermissionError("state directory is not writable")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(single_instance.os, "open", refuse_the_lock)
+
+    assert single_instance.acquire() is True
 
 
 # ---------------------------------------------------------------------------

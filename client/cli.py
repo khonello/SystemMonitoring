@@ -158,6 +158,16 @@ def _check() -> int:
     print(f"  lockout active   {lockout.is_blocked_now()}")
     print(f"  paused           {lockout.is_paused()}")
 
+    # Answered by taking the guard's own lock and dropping it again, so this
+    # reports the same thing the agent would decide rather than a second
+    # opinion. It holds the lock for microseconds; an agent starting in that
+    # window would be refused, which is acceptable for a manual diagnostic.
+    from client import single_instance
+
+    running = not single_instance.acquire()
+    single_instance.release()
+    print(f"  agent running    {running}")
+
     try:
         blacklist = policy.load_cached_policy().get("app_blacklist", [])
         print(f"  app blacklist    {len(blacklist)} entries")

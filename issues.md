@@ -496,6 +496,71 @@ It worked in every test because pytest runs from the repo root, which puts
 `scripts/` on `sys.path` regardless. It would have failed the moment anyone ran
 the documented command from anywhere else. Added to the package list.
 
+### B24. Nothing stopped two agents running under one client id — **DONE**
+
+B21 gave each client id its own `STATE_DIR`, which stopped agents under
+*different* ids from overwriting each other. It did nothing about two agents
+under the **same** id, and there was no single-instance guard anywhere in
+`client/`. The realistic trigger is not exotic: the service is running and
+someone also runs `python -m client` by hand, both defaulting to the same
+`hostname-platform` id.
+
+What happened then:
+
+- Both resolved the same `STATE_DIR` and raced on the same lockout schedule and
+  pause file. Writes are atomic (`mkstemp` + `os.replace`), so the result was
+  last-writer-wins rather than a corrupt file — but two writers on a
+  fail-closed schedule is exactly where ambiguity is least affordable.
+- **The Engine could not catch it.** `connection_manager.register()` sees a
+  second connection for a known peer and cannot distinguish a duplicate process
+  from a reconnect after a network blip, so it logs
+  `"replacing previous connection"` and overwrites the writer. The first agent
+  keeps running, believing it is connected, sending into a dead socket. So the
+  check has to be local and has to happen before the connect loop.
+
+**Fixed**: `client/single_instance.py` takes an exclusive lock on one byte of
+`agent.lock` inside `STATE_DIR`, held for the life of the process, acquired in
+`client/main.py` before anything else.
+
+Four things that shaped it:
+
+- **Placed before `lockout.check_on_startup()`, not after.** That call
+  relaunches the overlay if a block is still active, so a duplicate that
+  discovered itself later would have thrown a competing fullscreen window onto
+  the same screen on its way out — causing the D8 collision the guard exists to
+  prevent.
+- **Rejected: a heartbeat timestamp with a freshness window.** The obvious
+  design — the running agent refreshes a file, a starting agent treats a stale
+  one as "the previous is dead" — is a race rather than a lock (two agents
+  starting together both read stale and both proceed), and worse, it fails open
+  on crash-restart: an agent killed at T and restarted by service recovery at
+  T+2s reads a two-second-old file, concludes an agent is alive, and exits. A
+  crash keeping the agent down, in the component whose job is to fail closed.
+  An OS lock never asks "is the previous one dead", because the kernel already
+  knows — it is dropped on a clean exit, a `taskkill /f` and a bugcheck alike.
+- **Fails open on anything that is not a positive detection.** The lock being
+  held and the state directory being unwritable both surface as `OSError`
+  (errno 13 on Windows), so the two are told apart by *which call raised* —
+  `os.open` outside the try, the lock inside it. An unopenable lock logs and
+  starts anyway: refusing would leave the machine with no agent enforcing
+  anything, which is worse than the duplicate being guarded against.
+- **Keyed on the client id, not the machine.** A machine-wide singleton would
+  have undone B21's whole purpose. Because the lock lives in the already
+  per-id, already ACL'd `STATE_DIR`, that property comes for free.
+
+A byte-range file lock was preferred over a named mutex for one concrete
+reason: `Local\` mutexes are per-session, so they would miss the
+service-in-session-0 plus hand-run-in-the-user's-session case — the exact
+scenario that motivated this — and `Global\` requires `SeCreateGlobalPrivilege`,
+which a service holds and an interactive user does not. File locks are
+properties of the handle and are not session-scoped.
+
+Verified on Windows beyond the unit tests: a second agent under the same id
+exits 1 with the resolved lock path in the message, a second agent under a
+different id runs unaffected, and an agent restarted seconds after the first
+was hard-killed acquires normally. Covered by seven tests in `tests/test_client.py`,
+including the kill-the-holder case, which is the crash-restart guarantee.
+
 ### B11. Script import policy — **DONE** (this was A5)
 
 Answered: predefined scripts are standard library and `subprocess` only, no
@@ -846,6 +911,11 @@ not buy is a separate **screen**.
 Two agents on one machine both entering a block window each launch a fullscreen
 overlay on the same physical display. They fight: both re-assert topmost every
 500ms, and whichever wins is arbitrary. The same applies to the warning dialog.
+
+This is about agents under *different* ids, which is the supported simulation
+case. Two agents under the **same** id are now refused outright (B24), and that
+guard is deliberately keyed on the client id rather than the machine so it does
+not take the table below away.
 
 So the honest boundary for Phase 6's "10+ clients, ceiling 50":
 

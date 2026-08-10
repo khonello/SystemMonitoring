@@ -13,7 +13,7 @@ import asyncio
 import logging
 import sys
 
-from client import connection, lockout, policy
+from client import connection, lockout, policy, single_instance
 from client.config import (
     CLIENT_ID,
     ENGINE_HOST,
@@ -200,6 +200,17 @@ def main() -> int:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     logger.info("Starting Client Agent %s -> %s:%s", CLIENT_ID, ENGINE_HOST, ENGINE_PORT)
+
+    # Before check_on_startup, not after: that call relaunches the overlay if a
+    # block is still active, so a duplicate discovering itself later would throw
+    # a competing fullscreen window onto the same screen on its way out.
+    if not single_instance.acquire():
+        logger.error(
+            "Another Client Agent is already running as %s (lock: %s). "
+            "Exiting. Use --id NAME to run a second agent under a different "
+            "identity.", CLIENT_ID, single_instance.lock_path(),
+        )
+        return 1
 
     # A reboot is not an escape hatch: re-apply any still-active lockout before
     # anything else, without needing the Engine.
