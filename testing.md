@@ -37,16 +37,15 @@ Stated up front so a green run is not over-read.
   returns `True` unconditionally, so anyone who can reach port 5000 can register
   as any client — or as an **admin**, and issue commands.
 
-  This bites harder than it looks in the chosen setup. The Engine binds
-  `0.0.0.0`, and `networkingMode=mirrored` puts WSL on the host's *real*
-  interfaces — so on campus Wi-Fi the Engine is exposed to the whole network with
-  no authentication behind it. TLS does not help: encryption without
-  authentication only means the attacker's session is private too.
+  TLS does not help: encryption without authentication only means the
+  attacker's session is private too.
 
-  **Bind it where only the VM can reach it.** Section 0.2 points the port proxy
-  at the Default Switch address rather than `0.0.0.0`, so port 5000 answers only
-  on the virtual network between the host and the VM — true whether or not the
-  laptop is online. Nothing here needs a real network either (section 0.1c).
+  **The chosen setup answers this structurally.** An Internal switch has no
+  route to any real network, so the Engine is unreachable from Wi-Fi by
+  construction rather than by anyone remembering a rule (section 0.1). Under
+  topology A it is a rule instead — bind the port proxy to the Default Switch
+  address, never `0.0.0.0` (section 0.2) — which is one of the reasons topology
+  A is the fallback rather than the plan.
 - **Running by hand is not running as a service.** Everything below runs in your
   own login session. A service runs in session 0, which may behave differently
   for anything that draws on screen — that is exactly what T5.4 exists to check.
@@ -55,89 +54,26 @@ Stated up front so a green run is not over-read.
 
 ## Part 0 — Setup
 
-### 0.0 Two topologies — pick by the hardware you have
+### 0.0 The setup, and the fallback
 
-**A — WSL Engine, VM client** (sections 0.1–0.2). Works on the current laptop.
-Costs one Windows VM's disk, and one port proxy to bridge the two NATs between
-the VM and WSL.
+**The plan is two VMs on an isolated switch** (section 0.1): the Engine in its
+own Linux VM, the Client Agent in a Windows VM, both on a Hyper-V **Internal**
+switch, and the Administrator on the host. Chosen because it is simpler to run,
+not merely tidier — it has no port proxy, no NAT addresses that move when the
+host reboots, and no way for the Engine to be reachable from a real network.
 
-**B — two VMs on an isolated switch** (section 0.1e). Preferred once disk allows.
-Costs a second, very small VM and buys the removal of the port proxy, the moving
-NAT addresses, and the network exposure that follows from authentication still
-being a stub.
+**Topology A** (section 0.1f) keeps the Engine in WSL and bridges into it with a
+port proxy. It exists because it needs one less VM's worth of disk, which is the
+binding constraint on a machine that does not have ~70 GB spare. Use it if that
+is where you are; the results carry over unchanged.
 
-Everything from Part 1 onward is identical under either. Only how the client
-reaches the Engine changes.
+Everything from Part 1 onward is identical under either. Only how the Client
+reaches the Engine differs.
 
-### 0.1 Machine roles — topology A
+### 0.1 The setup — two VMs on an isolated switch
 
-One physical laptop, three environments. The Engine is Linux-only by design, so
-WSL covers it without a second machine; the Client goes in a Hyper-V VM because
-its tests are the ones you will want to repeat.
-
-| | Runs on | Why there |
-|---|---|---|
-| **Engine** | WSL, on the laptop | Linux-only by design (asyncio/epoll). Standard library only, so WSL needs no venv. |
-| **Administrator** | Windows, on the laptop | Needs Qt and a real display, and never needs reverting. |
-| **Client Agent** | Windows VM | Its tests take over a screen and install a service, so snapshots let you repeat them freely rather than once per sitting. |
-
-**This is the right assignment and the order does not need changing.** Each unit
-is where its constraints put it, and the one you will rerun most is the one that
-can be rolled back. Two sanity checks on it:
-
-- Putting the Admin in the VM and the Client on the host would be backwards —
-  the Admin is the one that never needs reverting.
-- Running the Engine in its own Linux VM buys nothing *on this laptop*, where
-  disk is the constraint — it is the same Linux either way. It buys plenty once
-  disk is not: see topology B in section 0.1e.
-
-**Networking is simpler than it looks here**, because the protocol is
-client-initiated: the Client opens a persistent connection outward to the Engine
-and the Engine never dials back. So the VM does not need to be reachable from
-anywhere — it only needs to reach the host. A NAT'd Hyper-V **Default Switch**
-is sufficient, and avoids the brief host network drop that creating an External
-switch causes. Use External only if you also want the VM on the LAN for its own
-sake.
-
-What the VM still needs:
-
-- **A route from the VM into WSL.** WSL2 sits behind its own NAT inside the
-  host, so the Engine is not reachable from the VM by default. Use the **port
-  proxy** in section 0.2 — it forwards from the host's own addresses, including the
-  Default Switch one the VM talks to. (`networkingMode=mirrored` also solves it,
-  but do not use it here: it puts WSL on the host's *real* interfaces, which
-  exposes an unauthenticated Engine to whatever network you are on, and is
-  fragile offline. See section 0.1c.)
-- **An inbound firewall rule for TCP 5000** on the host.
-- **The `certs/` directory copied in**, at the same relative path. Clients pin
-  that exact certificate.
-- Point the client at the host's Default Switch address:
-  `python -m client --engine <host-vEthernet-ip>`.
-
-Confirm with `Test-NetConnection <host-ip> -Port 5000` from inside the VM before
-going further.
-
-#### Three things a VM cannot tell you
-
-Not blockers, but do not read a failure here as a code fault.
-
-- **USB detection (T2.2) will not work in a Hyper-V VM.** `usb_monitor` counts a
-  drive as removable only when `GetDriveTypeW` returns `DRIVE_REMOVABLE`. Hyper-V
-  has no plain USB pass-through: an Enhanced Session redirected drive presents as
-  remote, and an attached VHD or pass-through disk presents as fixed. Neither
-  trips the check. **Run T2.1 and T2.2 on the host instead** — they touch
-  nothing, so that costs nothing.
-- **Clock skew after a snapshot restore.** Lockout schedules are time-based and
-  HMAC-protected, so a VM resumed with a stale clock can make a block window look
-  expired or not yet started. Run `w32tm /resync` after every revert, before
-  testing anything time-based.
-- **`--once` will report far fewer processes** than the ~212 seen on the host,
-  with fewer window titles. That is a quiet VM, not a broken collector.
-
-### 0.1e Topology B — two VMs on an isolated switch (preferred)
-
-Once disk is not the constraint, run the Engine in its own Linux VM rather than
-WSL, with both VMs on a **Hyper-V Internal switch**:
+The Engine runs in its own Linux VM rather than under WSL, and both VMs sit on a
+**Hyper-V Internal switch**:
 
 ```
   HOST: Admin  ──┐
@@ -217,7 +153,72 @@ written.
 7. `certs/` copied to all three; the pinned identity `labmonitor-engine` means
    the addresses above never appear in the certificate.
 
-Section 0.2 does not apply under this topology — there is no NAT to bridge.
+Section 0.2 does not apply here — there is no NAT to bridge.
+
+### 0.1f Topology A — the fallback, for a machine short on disk
+
+One physical laptop, three environments. The Engine is Linux-only by design, so
+WSL covers it without a second machine; the Client goes in a Hyper-V VM because
+its tests are the ones you will want to repeat.
+
+| | Runs on | Why there |
+|---|---|---|
+| **Engine** | WSL, on the laptop | Linux-only by design (asyncio/epoll). Standard library only, so WSL needs no venv. |
+| **Administrator** | Windows, on the laptop | Needs Qt and a real display, and never needs reverting. |
+| **Client Agent** | Windows VM | Its tests take over a screen and install a service, so snapshots let you repeat them freely rather than once per sitting. |
+
+**This is the right assignment and the order does not need changing.** Each unit
+is where its constraints put it, and the one you will rerun most is the one that
+can be rolled back. Two sanity checks on it:
+
+- Putting the Admin in the VM and the Client on the host would be backwards —
+  the Admin is the one that never needs reverting.
+- Running the Engine in its own Linux VM buys nothing *on this laptop*, where
+  disk is the constraint — it is the same Linux either way. It buys plenty once
+  disk is not: see topology B in section 0.1.
+
+**Networking is simpler than it looks here**, because the protocol is
+client-initiated: the Client opens a persistent connection outward to the Engine
+and the Engine never dials back. So the VM does not need to be reachable from
+anywhere — it only needs to reach the host. A NAT'd Hyper-V **Default Switch**
+is sufficient, and avoids the brief host network drop that creating an External
+switch causes. Use External only if you also want the VM on the LAN for its own
+sake.
+
+What the VM still needs:
+
+- **A route from the VM into WSL.** WSL2 sits behind its own NAT inside the
+  host, so the Engine is not reachable from the VM by default. Use the **port
+  proxy** in section 0.2 — it forwards from the host's own addresses, including the
+  Default Switch one the VM talks to. (`networkingMode=mirrored` also solves it,
+  but do not use it here: it puts WSL on the host's *real* interfaces, which
+  exposes an unauthenticated Engine to whatever network you are on, and is
+  fragile offline. See section 0.1c.)
+- **An inbound firewall rule for TCP 5000** on the host.
+- **The `certs/` directory copied in**, at the same relative path. Clients pin
+  that exact certificate.
+- Point the client at the host's Default Switch address:
+  `python -m client --engine <host-vEthernet-ip>`.
+
+Confirm with `Test-NetConnection <host-ip> -Port 5000` from inside the VM before
+going further.
+
+#### Three things a VM cannot tell you
+
+Not blockers, but do not read a failure here as a code fault.
+
+- **USB detection (T2.2) will not work in a Hyper-V VM.** `usb_monitor` counts a
+  drive as removable only when `GetDriveTypeW` returns `DRIVE_REMOVABLE`. Hyper-V
+  has no plain USB pass-through: an Enhanced Session redirected drive presents as
+  remote, and an attached VHD or pass-through disk presents as fixed. Neither
+  trips the check. **Run T2.1 and T2.2 on the host instead** — they touch
+  nothing, so that costs nothing.
+- **Clock skew after a snapshot restore.** Lockout schedules are time-based and
+  HMAC-protected, so a VM resumed with a stale clock can make a block window look
+  expired or not yet started. Run `w32tm /resync` after every revert, before
+  testing anything time-based.
+- **`--once` will report far fewer processes** than the ~212 seen on the host,
+  with fewer window titles. That is a quiet VM, not a broken collector.
 
 ### 0.1a One machine, if that is all you have
 
@@ -336,9 +337,9 @@ exist.** Every link is internal to the laptop:
 
 | Link | Carried by | Needs internet? |
 |---|---|---|
-| Admin → Engine | WSL2 loopback forwarding | no |
-| VM → Engine | Hyper-V Default Switch (host-side NAT + DHCP) | no |
-| VM clock | Hyper-V Integration Services, synced from the host | no |
+| Admin → Engine | the Internal switch (WSL loopback under topology A) | no |
+| Client → Engine | the same Internal switch (Default Switch + proxy under A) | no |
+| VM clocks | Hyper-V Integration Services, synced from the host | no |
 
 The Default Switch runs its own DHCP and NAT on the host, so the VM gets an
 address and can reach the host with the laptop in airplane mode. Disconnecting
@@ -352,11 +353,14 @@ into a theoretical one for the whole of Phase 5. Use the hotspot only for
 one-time provisioning — the Windows ISO, Python, `pip install` inside the VM —
 then take it off the network and leave it there.
 
-One consequence: **do not use `networkingMode=mirrored` in this setup.** Mirrored
-mode hands WSL the host's real interfaces, which is both the exposure above and
-fragile with no interfaces to share. Use the port proxy in section 0.2 instead — it
-forwards from the host's own addresses, including the Default Switch one the VM
-talks to, and works with the laptop entirely offline.
+Under the chosen setup none of this needs managing: the Internal switch carries
+no route anywhere, so the Engine is off every real network whether the laptop is
+online or not.
+
+Under topology A it does need managing. **Do not use `networkingMode=mirrored`
+there** — it hands WSL the host's real interfaces, which is both the exposure
+above and fragile with no interfaces to share. Use the port proxy in section 0.2,
+bound to the Default Switch address.
 
 ### 0.1d Building the VM
 
@@ -426,7 +430,7 @@ Take a second checkpoint named **"pre-service"** immediately before T5.4's
 `install_service`, and revert to it after each attempt. That is the whole reason
 the VM is worth its two hours.
 
-### 0.2 Reaching WSL from the VM
+### 0.2 Reaching WSL from the VM — topology A only
 
 Three environments, two NATs, and one link that needs building. What talks to
 what:
@@ -540,7 +544,7 @@ all three. Put it back before you call Phase 5 done.
 
 ---
 
-## Part 1 — Engine, alone (host, WSL)
+## Part 1 — Engine, alone (its VM; or WSL under topology A)
 
 Nothing else running for any of this.
 
@@ -766,7 +770,7 @@ While an overlay is up, try Ctrl+Shift+Esc. Then after it exits, try again.
 
 ---
 
-## Part 5 — The two-machine link
+## Part 5 — The link
 
 Only now does anything talk to anything.
 

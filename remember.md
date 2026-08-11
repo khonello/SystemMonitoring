@@ -55,14 +55,13 @@ No **Security** node means the VM is **Generation 1** — no UEFI, no Secure Boo
 no vTPM, and Windows 11 will not install. Generation cannot be changed after
 creation, so delete it and make a new Gen 2 VM.
 
-**Two topologies, and the better one needs disk.** Topology A (current laptop)
-is the Engine in WSL with a port proxy into it. Topology B — Engine and Client
-as two VMs on a Hyper-V **Internal** switch, Admin on the host — removes the
-proxy, the moving NAT addresses, and the unauthenticated-Engine exposure, because
-an Internal switch has no route to any real network. Internal, **not** Private:
-Private excludes the host, and the Admin lives there. Fits 16 GB with the Admin
-on the host; a third VM for the Admin does not. See [testing.md](testing.md)
-section 0.1e.
+**The setup is two VMs on an Internal switch**, Admin on the host: no port
+proxy, no NAT addresses that move on reboot, and no route from the Engine to any
+real network — which is what keeps an Engine that authenticates nobody safe by
+construction rather than by rule. **Internal, not Private**: Private excludes the
+host, and the Admin lives there. Fits 16 GB with the Admin on the host; a third
+VM for the Admin does not. Topology A (Engine in WSL, port proxy) is the fallback
+for a machine short on disk. See [testing.md](testing.md) section 0.1.
 
 **The network adapter is changeable at any time**, at **VM → Settings → Network
 Adapter**. Install on *Default Switch* so OOBE and `pip` have internet, then
