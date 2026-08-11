@@ -44,6 +44,31 @@ on the Windows laptop rather than needing a third machine.
 | Administrator | ✅ on Windows | — |
 | Client Agent | — | ✅ on Windows |
 
+### 0.1a One machine, if that is all you have
+
+All three run on a single laptop: **two on Windows** (Administrator, Client
+Agent) **and one in WSL** (Engine). Nothing in Parts 1–3 needs a second machine,
+and the whole command path — registration, telemetry, policy, reports, the audit
+trail — works end to end this way. WSL2's localhost forwarding means the client
+reaches the Engine at `127.0.0.1:5000` with no setup at all, so §0.2 below can be
+skipped entirely.
+
+What a single machine **cannot** test:
+
+- **Anything the student would see.** The overlay would cover *your* screen and
+  disable *your* Task Manager while you are working. T4.2–T4.6 and T5.5–T5.8 all
+  need a machine you are willing to lose for a few minutes.
+- **The link itself.** A real network hop, the WSL NAT crossing, TLS against a
+  non-loopback address, and the reconnect/backoff behaviour of T5.3 are all
+  loopback no-ops on one box.
+- **Session 0 (C11).** Installing the service on your dev machine to test this
+  means a service that starts on every boot and can black out your screen.
+
+So: use one machine for Parts 1–3 and T5.1–T5.3, and bring in Laptop B for
+Part 4 and T5.4 onward. Running the client under `--id` on the same box as the
+Engine and Admin is not a compromise for any of the former — it is the same
+socket, protocol and database either way.
+
 **Engine and Admin on one laptop is fine and is the intended dev setup.** They
 are different processes, in different operating systems, talking over a socket;
 WSL2 forwards `localhost`, so the Admin reaches the Engine at `127.0.0.1:5000`

@@ -862,6 +862,23 @@ overlay when the agent is dead, that is its purpose. A lock file in `STATE_DIR`
 held by the overlay itself, checked before launching, is the same mechanism
 B24 already proved. `testing.md` T5.8 observes the current behaviour.
 
+### C14. `dialog_app --help` exits 3 — *cosmetic, one line*
+
+Found while checking that every command named in `commands.md` resolves.
+
+`client/dialog_app.py:148` wraps `parse_args` in `except SystemExit: return
+EXIT_BAD_ARGS`, which is right for a bad argument but also catches the
+`SystemExit(0)` argparse raises for `--help`. The help text still prints, so
+this is cosmetic — but for a program whose *answer is its exit code* (0
+acknowledged, 1 cancelled, 2 timed out, 3 bad arguments) it means the code
+cannot distinguish "the operator asked for help" from "the caller passed
+nonsense".
+
+**Fix**: `except SystemExit as exc: return EXIT_BAD_ARGS if exc.code else 0`.
+Left unfixed only because nothing calls `--help` programmatically; do it
+alongside the next change to that file. Documented in `commands.md` so the
+behaviour is not a surprise meanwhile.
+
 ---
 
 ## D — Accepted limitations
