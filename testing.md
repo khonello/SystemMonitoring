@@ -85,9 +85,13 @@ sake.
 
 What the VM still needs:
 
-- **`networkingMode=mirrored`** in `%USERPROFILE%\.wslconfig` on the host, so
-  the Engine inside WSL is reachable on the host's interfaces rather than only
-  on WSL's NAT. Without it, use the port proxy in §0.2 instead.
+- **A route from the VM into WSL.** WSL2 sits behind its own NAT inside the
+  host, so the Engine is not reachable from the VM by default. Use the **port
+  proxy** in §0.2 — it forwards from the host's own addresses, including the
+  Default Switch one the VM talks to. (`networkingMode=mirrored` also solves it,
+  but do not use it here: it puts WSL on the host's *real* interfaces, which
+  exposes an unauthenticated Engine to whatever network you are on, and is
+  fragile offline. See §0.1c.)
 - **An inbound firewall rule for TCP 5000** on the host.
 - **The `certs/` directory copied in**, at the same relative path. Clients pin
   that exact certificate.
