@@ -150,19 +150,30 @@ everything that needs no second machine comes first.
 | **Windows VM on your laptop** | none | ~2h once | revert in seconds, repeat freely, desktop stays yours |
 | **Second physical laptop** | a laptop | ~1h once | real network and a real second screen |
 
-**What is actually at stake on your own machine.** The overlay covers the
-primary display and disables Task Manager while a block window is open. Blocks
-are capped at 2 hours, the overlay closes itself at its end time, and the Task
-Manager policy is always restored on exit — including on a crash.
-`install_service.py --uninstall` removes the service and the Scheduled Task.
-So the realistic worst case is a screen you cannot use for up to two hours, not
-a machine you have to repair.
+**Which tests this is about — everything else is ordinary.** Only **T4.2**
+(running the overlay) and **T5.4–T5.8** (installing the service and setting a
+block) take over a screen. Part 0 provisioning, Parts 1–3 and T5.1–T5.3 do
+nothing of the sort; they start processes, print things and exit.
 
-That is survivable, which is why testing on one machine is a legitimate choice.
-It is just tedious: every attempt costs you your desktop for the length of the
-block, so you end up running each test once, carefully, rather than as many
-times as it takes to understand what you are seeing. C11 in particular is worth
-poking at repeatedly.
+Nothing blocks a machine by itself. A block window exists only if an admin sends
+a schedule command, or you launch `overlay_app` by hand. `store_schedule` has
+exactly one caller — the handler for that admin command — and a client with no
+schedule file reports `lockout active False`, because `load_schedule` returns
+None rather than inventing anything. (The fail-closed synthetic block applies to
+a schedule that *exists* and fails its integrity check, so it cannot appear on a
+machine that was never given one.)
+
+**And when those tests do run**, the overlay covers the primary display and
+disables Task Manager for the length of the block. Blocks are capped at 2 hours,
+the overlay closes itself at its end time, and the Task Manager policy is
+restored on exit including on a crash. `install_service.py --uninstall` removes
+the service and the Scheduled Task. So the ceiling is a screen you cannot use
+for a couple of hours, not a machine to repair.
+
+Which is why testing on one machine is a legitimate choice. It is just tedious:
+each attempt costs you your desktop for the length of the block, so you end up
+running those few tests once carefully rather than as many times as it takes to
+understand what you are seeing. C11 is worth poking at repeatedly.
 
 **The VM is the best value, and you already have what it needs.**
 
