@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from client import executor, lockout, policy, single_instance, state
+from client import executor, lockout, policy, session, single_instance, state
 from client.connection import reconnect_delay
 from client.executor import handle_command, running_scripts, terminate_process
 from client.monitors.network_monitor import collect_network_data
@@ -306,6 +306,50 @@ def test_owner_pid_is_recorded_and_cleared():
 
     single_instance.release(single_instance.OVERLAY_LOCK)
     assert single_instance.owner_pid(single_instance.OVERLAY_LOCK) is None
+
+
+# ---------------------------------------------------------------------------
+# Windows session visibility (issues.md C11)
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_is_reported_on_windows_and_absent_elsewhere():
+    where = session.current_session_id()
+
+    if IS_WINDOWS:
+        assert isinstance(where, int)
+    else:
+        assert where is None
+
+
+@windows_only
+def test_tests_do_not_run_in_the_services_session():
+    """Guards the guard: if this ever failed, the warning below proves nothing."""
+    assert session.current_session_id() != session.SERVICES_SESSION
+    assert session.in_services_session() is False
+
+
+def test_unknown_session_is_treated_as_visible(monkeypatch):
+    """Never let a failed API call suppress a lockout.
+
+    in_services_session answers "definitely invisible", so an unknown answer has
+    to be False. The alternative would have ProcessIdToSessionId failing quietly
+    turn into an overlay nobody launches.
+    """
+    monkeypatch.setattr(session, "current_session_id", lambda: None)
+
+    assert session.in_services_session() is False
+    assert session.warn_if_invisible("anything") is False
+
+
+def test_launching_from_session_zero_is_flagged(monkeypatch, caplog):
+    monkeypatch.setattr(session, "current_session_id", lambda: session.SERVICES_SESSION)
+
+    with caplog.at_level("WARNING"):
+        assert session.warn_if_invisible("The lockout overlay") is True
+
+    assert "session 0" in caplog.text
+    assert "C11" in caplog.text
 
 
 # ---------------------------------------------------------------------------

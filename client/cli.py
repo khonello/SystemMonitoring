@@ -168,6 +168,12 @@ def _check() -> int:
     single_instance.release()
     print(f"  agent running    {running}")
 
+    from client import session
+
+    where = session.current_session_id()
+    note = "  <- no display attached; UI would be invisible" if where == 0 else ""
+    print(f"  windows session  {where}{note}")
+
     try:
         blacklist = policy.load_cached_policy().get("app_blacklist", [])
         print(f"  app blacklist    {len(blacklist)} entries")

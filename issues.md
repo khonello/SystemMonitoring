@@ -902,6 +902,15 @@ that reports success at every level.
 prompt, where the overlay inherits your session and works. It is an assumption
 that has never been tested, which is precisely what Phase 5 exists to catch.
 
+**Detection is in, ahead of the fix.** `client/session.py` reports the process's
+Windows session via `ProcessIdToSessionId` (stdlib `ctypes`, no dependency), and
+`start_overlay` logs a warning before launching if it is running in session 0.
+`python -m client --check` prints the session too. This does not fix anything —
+it turns the silent half of the failure into a visible one, so T5.5 reads
+"session 0, may be invisible" in the log instead of an unqualified "overlay
+started". Correct whichever way the measurement goes, which is why it was worth
+doing before it.
+
 **Why this entry is not marked verified**: creating a service and a Scheduled
 Task needs elevation, so this could not be settled from a normal session. The
 reasoning is from documented Windows behaviour, not measurement. **Do not act on

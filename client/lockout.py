@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from client import single_instance
+from client import session, single_instance
 from client.config import CLIENT_ID, OVERLAY_EXE_PATH
 from client.state import PAUSE_FILE, SCHEDULE_FILE, StateTampered, read_state, write_state
 from common.constants import (
@@ -297,6 +297,11 @@ def start_overlay(end: datetime, mode: str = OVERLAY_MODE_SCHEDULED) -> bool:
         # far smaller failure than one that flaps or ends up doubled.
         logger.debug("An overlay is already up for this client; leaving it alone")
         return True
+
+    # The overlay is the one thing here that has to be *seen*. Say so at the
+    # moment of launch if this process cannot show it, rather than letting the
+    # success log below stand unqualified (issues.md C11).
+    session.warn_if_invisible("The lockout overlay")
 
     try:
         _overlay = subprocess.Popen(_overlay_command(end, mode))
