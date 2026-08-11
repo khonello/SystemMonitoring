@@ -15,8 +15,8 @@ Work top to bottom. Record results in the table at the end.
 | **1** | **Engine alone** — config resolves, database is writable, it serves, TLS is genuinely enforced | one | yes |
 | **2** | **Client alone** — collection works on this hardware, state paths resolve, one agent per id | one | yes |
 | **3** | **Admin alone** — QML loads clean, config resolves, the window survives a failed connect | one | yes |
-| **4** | Helper windows — dialog exit codes, overlay, Task Manager | one | **no** — takes the screen |
-| **5** | The link — registration, telemetry, reconnect, and enforcement from a service | two | **no** — installs a service |
+| **4** | Helper windows — dialog exit codes, overlay, Task Manager | VM | **no** — takes the screen |
+| **5** | The link — registration, telemetry, reconnect, and enforcement from a service | host + VM | **no** — installs a service |
 
 **Parts 1–3 are the heart of this phase**: each unit proven on its own, with
 nothing else running, so any failure names one component instead of "the
@@ -34,9 +34,19 @@ Stated up front so a green run is not over-read.
   the running interpreter, and the overlay runs as a Python module instead of
   a frozen executable. Each logs a warning. Phase 8 re-verifies this ground.
 - **Authentication is a stub** (`issues.md` C1). `verify_challenge_response`
-  returns `True` unconditionally, so anyone on the network can register as any
-  client or as an admin. **Test on an isolated network — a phone hotspot or a
-  direct cable between the two laptops — never on campus or shared Wi-Fi.**
+  returns `True` unconditionally, so anyone who can reach port 5000 can register
+  as any client — or as an **admin**, and issue commands.
+
+  This bites harder than it looks in the chosen setup. The Engine binds
+  `0.0.0.0`, and `networkingMode=mirrored` puts WSL on the host's *real*
+  interfaces — so on campus Wi-Fi the Engine is exposed to the whole network with
+  no authentication behind it. TLS does not help: encryption without
+  authentication only means the attacker's session is private too.
+
+  **Either work offline / on a phone hotspot while the Engine is running, or
+  skip mirrored mode and use the §0.2 port proxy** — that keeps the listener on
+  the Hyper-V virtual network the VM uses, rather than on the LAN. Bind
+  explicitly with `--host` if you want to be certain what is listening where.
 - **Running by hand is not running as a service.** Everything below runs in your
   own login session. A service runs in session 0, which may behave differently
   for anything that draws on screen — that is exactly what T5.4 exists to check.
@@ -45,16 +55,66 @@ Stated up front so a green run is not over-read.
 
 ## Part 0 — Setup
 
-### 0.1 Machine roles
+### 0.1 Machine roles — the chosen setup
 
-Two laptops is enough. The Engine is Linux-only by design, so it runs under WSL
-on the Windows laptop rather than needing a third machine.
+One physical laptop, three environments. The Engine is Linux-only by design, so
+WSL covers it without a second machine; the Client goes in a Hyper-V VM because
+it is the only unit whose tests are destructive.
 
-| | Laptop A ("server") | Laptop B ("lab machine") |
+| | Runs on | Why there |
 |---|---|---|
-| Engine | ✅ under WSL | — |
-| Administrator | ✅ on Windows | — |
-| Client Agent | — | ✅ on Windows |
+| **Engine** | WSL, on the laptop | Linux-only by design (asyncio/epoll). Standard library only, so WSL needs no venv. |
+| **Administrator** | Windows, on the laptop | Needs Qt and a real display; nothing it does can damage the host. |
+| **Client Agent** | Windows VM | The only unit that installs a boot-start service and blacks out a screen. Snapshots make that repeatable instead of one-shot. |
+
+**This is the right assignment and the order does not need changing.** Each unit
+is where its constraints put it, and the destructive one is the one that can be
+rolled back. Two sanity checks on it:
+
+- Putting the Admin in the VM and the Client on the host would be exactly
+  backwards — it would move the only dangerous component onto your working
+  machine.
+- Running the Engine in its own Linux VM instead of WSL would work but buys
+  nothing: it is the same Linux, and WSL is the documented setup.
+
+**Networking is simpler than it looks here**, because the protocol is
+client-initiated: the Client opens a persistent connection outward to the Engine
+and the Engine never dials back. So the VM does not need to be reachable from
+anywhere — it only needs to reach the host. A NAT'd Hyper-V **Default Switch**
+is sufficient, and avoids the brief host network drop that creating an External
+switch causes. Use External only if you also want the VM on the LAN for its own
+sake.
+
+What the VM still needs:
+
+- **`networkingMode=mirrored`** in `%USERPROFILE%\.wslconfig` on the host, so
+  the Engine inside WSL is reachable on the host's interfaces rather than only
+  on WSL's NAT. Without it, use the port proxy in §0.2 instead.
+- **An inbound firewall rule for TCP 5000** on the host.
+- **The `certs/` directory copied in**, at the same relative path. Clients pin
+  that exact certificate.
+- Point the client at the host's Default Switch address:
+  `python -m client --engine <host-vEthernet-ip>`.
+
+Confirm with `Test-NetConnection <host-ip> -Port 5000` from inside the VM before
+going further.
+
+#### Three things a VM cannot tell you
+
+Not blockers, but do not read a failure here as a code fault.
+
+- **USB detection (T2.2) will not work in a Hyper-V VM.** `usb_monitor` counts a
+  drive as removable only when `GetDriveTypeW` returns `DRIVE_REMOVABLE`. Hyper-V
+  has no plain USB pass-through: an Enhanced Session redirected drive presents as
+  remote, and an attached VHD or pass-through disk presents as fixed. Neither
+  trips the check. **Run T2.1 and T2.2 on the host instead** — Part 2 is
+  non-destructive, so that costs nothing.
+- **Clock skew after a snapshot restore.** Lockout schedules are time-based and
+  HMAC-protected, so a VM resumed with a stale clock can make a block window look
+  expired or not yet started. Run `w32tm /resync` after every revert, before
+  testing anything time-based.
+- **`--once` will report far fewer processes** than the ~212 seen on the host,
+  with fewer window titles. That is a quiet VM, not a broken collector.
 
 ### 0.1a One machine, if that is all you have
 
@@ -76,7 +136,7 @@ What a single machine **cannot** test:
 - **Session 0 (C11).** Installing the service on your dev machine to test this
   means a service that starts on every boot and can black out your screen.
 
-So: use one machine for Parts 1–3 and T5.1–T5.3, and bring in Laptop B for
+So: use the host alone for Parts 1–3 and T5.1–T5.3, and bring in the VM for
 Part 4 and T5.4 onward. Running the client under `--id` on the same box as the
 Engine and Admin is not a compromise for any of the former — it is the same
 socket, protocol and database either way.
@@ -160,11 +220,14 @@ Two things to be aware of, neither a blocker:
   number; if it is unpleasant, copy the repo into the WSL filesystem
   (`~/SystemMonitoring`) for the Engine only.
 
-### 0.2 The one real obstacle: reaching WSL from Laptop B
+### 0.2 Reaching WSL from the VM (or from a second laptop)
 
-WSL2 sits behind a NAT inside Laptop A. `localhost` forwarding is what lets
+*Skip this if `networkingMode=mirrored` in §0.1 already worked — check with
+`Test-NetConnection` first.*
+
+WSL2 sits behind a NAT inside the host. `localhost` forwarding is what lets
 Windows-on-A reach it — but that does **not** extend to another machine. Left
-alone, Laptop B cannot see the Engine at all.
+alone, the VM cannot see the Engine at all.
 
 Two ways to fix it. Try mirrored networking first; it is one line and removes
 the problem instead of working around it.
@@ -177,9 +240,9 @@ networkingMode=mirrored
 ```
 
 Then `wsl --shutdown` and restart. WSL now shares the Windows network interface,
-so the Engine is reachable at Laptop A's LAN address directly.
+so the Engine is reachable at the host's address directly.
 
-**Option 2 — port proxy.** From an **elevated** PowerShell on Laptop A:
+**Option 2 — port proxy.** From an **elevated** PowerShell on the host:
 
 ```powershell
 $wsl = (wsl -- hostname -I).Trim().Split()[0]
@@ -194,10 +257,10 @@ netsh interface portproxy delete v4tov4 listenport=5000 listenaddress=0.0.0.0
 netsh advfirewall firewall delete rule name="LabMonitor Engine"
 ```
 
-Either way, confirm from Laptop B before going further:
+Either way, confirm from the VM before going further:
 
 ```powershell
-Test-NetConnection <laptop-A-ip> -Port 5000
+Test-NetConnection <host-ip> -Port 5000
 ```
 
 `TcpTestSucceeded : True` is the gate. If it is False, nothing in Part 5 will
@@ -205,7 +268,7 @@ work and the fault is here, not in the code.
 
 ### 0.3 Install
 
-Laptop A (both units) and Laptop B (client only):
+Host (Engine + Admin) and VM (client only):
 
 ```powershell
 pip install -r requirements.txt -r requirements-admin.txt -r requirements-client.txt   # A
@@ -217,15 +280,15 @@ The Engine needs nothing installed in WSL — it is standard library only.
 ### 0.4 TLS
 
 TLS is presence-based: once `certs/engine-cert.pem` exists, all three units use
-it with no flag. Generate **once**, on Laptop A:
+it with no flag. Generate **once**, on the host:
 
 ```powershell
 python -m scripts.generate_cert
 ```
 
-Then copy the whole `certs/` directory to Laptop B at the same relative path.
+Then copy the whole `certs/` directory into the VM at the same relative path.
 Clients pin that exact certificate and verify against the fixed identity
-`labmonitor-engine`, not the IP — so Laptop A's address can change without
+`labmonitor-engine`, not the IP — so the host's address can change without
 breaking anything, but a *regenerated* certificate breaks every client until
 it is re-copied.
 
@@ -237,7 +300,7 @@ all three. Put it back before you call Phase 5 done.
 
 ---
 
-## Part 1 — Engine, alone (Laptop A, WSL)
+## Part 1 — Engine, alone (host, WSL)
 
 Nothing else running for any of this.
 
@@ -273,7 +336,7 @@ for the rest of Part 1.
 
 ### T1.3 — Refusing a plaintext peer
 
-With TLS on, from Laptop A's Windows side:
+With TLS on, from the host's Windows side:
 
 ```powershell
 python -m client --once            # no network; just proves the client works
@@ -303,7 +366,7 @@ python -m scripts.bench_database
 
 ---
 
-## Part 2 — Client Agent, alone (Laptop B)
+## Part 2 — Client Agent, alone (VM; T2.1–T2.2 on the host)
 
 No Engine needed for T2.1–T2.4. This is the most valuable part of Phase 5 —
 every failure here would otherwise look like a networking problem later.
@@ -374,7 +437,7 @@ behaviour in the client.
 
 ---
 
-## Part 3 — Administrator, alone (Laptop A, Windows)
+## Part 3 — Administrator, alone (host, Windows)
 
 ### T3.1 — QML loads clean
 
@@ -413,7 +476,7 @@ single-threaded over qasync, so a hang here means something blocked the loop.
 
 ---
 
-## Part 4 — Helper windows (Laptop B)
+## Part 4 — Helper windows (VM)
 
 Both are QML and both take over the screen to some degree. Run them when
 convenient, not mid-demo.
@@ -468,10 +531,10 @@ Only now does anything talk to anything.
 
 ### T5.1 — Registration and heartbeat
 
-Engine running on A with `ENGINE_LOG_LEVEL=DEBUG`. On B:
+Engine running in WSL with `ENGINE_LOG_LEVEL=DEBUG`. In the VM:
 
 ```powershell
-python -m client --engine <laptop-A-ip> -v
+python -m client --engine <host-ip> -v
 ```
 
 Expect on the Engine: a registration line naming the client id, then a heartbeat
@@ -497,7 +560,7 @@ heartbeat like clients, and without that the Engine reaps them after 60s.
 
 ### T5.3 — Reconnect
 
-Pull Laptop B off the network (or stop the Engine) with the agent running.
+Disconnect the VM's network adapter (or stop the Engine) with the agent running.
 Expect reconnect attempts backing off from **5s** toward a **60s** ceiling, and
 a clean re-registration when the Engine returns.
 
@@ -515,12 +578,12 @@ interactive desktop. If a GUI launched from there cannot reach your screen, the
 overlay would be invisible while every log line still reports success.
 
 ```powershell
-# elevated prompt on Laptop B
+# elevated prompt in the VM - take a snapshot first
 python -m client.install_service
 sc start LabMonitorAgent
 ```
 
-Then set a block from the Admin and watch Laptop B's screen.
+Then set a block from the Admin and watch the VM's screen.
 
 - [ ] **T5.5** overlay visible when launched by the **service**: Y/N
 - [ ] **T5.6** overlay visible when launched by the **Scheduled Task** watchdog
