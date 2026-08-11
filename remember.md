@@ -16,11 +16,12 @@ did" without touching the network: `engine --check`, `client --check`,
 
 ## Worth getting right
 
-**Never run the Engine on a network you do not control.** Authentication is a
-stub that accepts anyone (`issues.md` C1). Anyone who reaches port 5000 can
-register as an **admin** and issue commands. TLS does not help — encryption
-without authentication only means the attacker's session is private too. Phase 5
-needs no network at all, so run it offline. → [testing.md](testing.md) section 0.1c
+**Never put the Engine on a network you do not control.** Authentication is a
+stub that accepts anyone (`issues.md` C1): whoever reaches port 5000 can register
+as an **admin** and issue commands. TLS does not help — encryption without
+authentication only means the attacker's session is private too. The Internal
+switch handles this by construction, having no route anywhere; under topology A
+it is a rule you have to keep. → [testing.md](testing.md) section 0.1c
 
 **Give the overlay a machine you are not using.** It covers the screen, disables
 Task Manager and re-asserts topmost every 500ms until its `--until` time. It
@@ -37,9 +38,9 @@ times as you like.
 and HMAC-protected. A stale VM clock makes block windows look expired or not yet
 started, which reads exactly like an enforcement bug.
 
-## The Hyper-V VM
+## The Hyper-V VMs
 
-Full build in [testing.md](testing.md) section 0.1d. Three things worth knowing without
+Full build in [testing.md](testing.md) sections 0.1 and 0.1d. Worth knowing without
 looking them up:
 
 **The vTPM is off by default and Setup will not tell you.** Generation 2 VMs have
@@ -63,20 +64,16 @@ host, and the Admin lives there. Fits 16 GB with the Admin on the host; a third
 VM for the Admin does not. Topology A (Engine in WSL, port proxy) is the fallback
 for a machine short on disk. See [testing.md](testing.md) section 0.1.
 
-**The network adapter is changeable at any time**, at **VM → Settings → Network
-Adapter**. Install on *Default Switch* so OOBE and `pip` have internet, then
-switch to *Not Connected* once provisioning is done — Phase 5 needs no network
-(section 0.1c). Leave the **WSL** switch alone despite the Engine living there: WSL
-creates and reconfigures it, not you.
+**Two adapters per VM during provisioning, one after.** Give each VM the
+Internal switch *and* a Default Switch adapter so OOBE and `pip` have internet,
+then remove the Default Switch one. **Do not leave a VM on no network at all** —
+the Internal switch is how the client reaches the Engine, and Part 5 needs it.
+(Disconnecting it *is* how T5.3 simulates network loss, temporarily.) Adapters
+are changeable any time at **VM → Settings → Network Adapter**.
 
-**The Default Switch address changes when the host reboots.** It is NAT, so the
-host's `vEthernet (Default Switch)` address is not stable. Re-read it rather than
-recording it once, or the port proxy and `--engine` will point at yesterday's
-address:
-
-```powershell
-Get-NetIPAddress -InterfaceAlias "vEthernet (Default Switch)" -AddressFamily IPv4
-```
+**Static IPs on the Internal switch** — it has no DHCP. Host `192.168.100.1`,
+Engine `.2`, Client `.3`, `/24`, no gateway. Nothing moves when the host reboots,
+unlike topology A's two NAT ranges.
 
 ## Things that fail silently
 
@@ -96,12 +93,24 @@ quietly reduces TLS to obfuscation. `ENGINE_TLS=0` is the honest escape hatch.
 **A tamper check that fails means still blocked.** Lockout state fails closed by
 design. If validation fails, that is the answer, not an error to route around.
 
+## Scope
+
+**This is a project defence, demonstrated on VMs.** Not a deployment, not real
+lab machines, nobody monitored but you. Two things follow:
+
+- **No institutional approval is in play** (`issues.md` A2). It becomes real the
+  moment the monitored person is not you — a voluntary pilot counts. A panel may
+  still ask; the honest answer is that the requirement is understood and the
+  project already cut keylogging on those grounds.
+- **C11 gates a real install, not the demo.** Run the agent by hand in the VM and
+  the overlay behaves normally, because session 0 never enters into it.
+
 ## Open, and worth not rediscovering
 
-**C11 gates Phase 6** — the agent's service and the watchdog task both run as
+**C11 is unverified** — the agent's service and the watchdog task both run as
 SYSTEM in session 0, isolated from the interactive desktop, so the overlay may
-render where nobody can see it while every log line reports success. Unverified;
-needs elevation. `testing.md` T5.5–T5.7 measure it.
+render where nobody can see it while every log line reports success. Needs
+elevation. `testing.md` T5.5–T5.7 measure it. Gates a real install; see Scope.
 
 **C12 and C14 are fixed** (now B25 and B26). The overlay holds its own lock in
 `STATE_DIR`, so every launcher can see it; `dialog_app --help` exits 0.

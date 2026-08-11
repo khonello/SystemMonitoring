@@ -816,7 +816,7 @@ local and must not depend on the Engine.
 
 ### T5.4 — Does enforcement work from a service context? *(new, unverified)*
 
-**The one genuinely unknown result in this phase.** Everything above runs in your login session. In
+**The one genuinely unknown result in this phase** — and the one that gates a real install rather than the defence, since a hand-run agent never enters session 0. Everything above runs in your login session. In
 production the agent runs as a Windows service and the lockout watchdog runs as
 a Scheduled Task — both as SYSTEM, in session 0, which is isolated from the
 interactive desktop. If a GUI launched from there cannot reach your screen, the
@@ -836,8 +836,10 @@ Then set a block from the Admin and watch the VM's screen.
 - [ ] **T5.7** `DisableTaskMgr` written to the **logged-in user's** hive, not
       SYSTEM's: Y/N
 
-If T5.5 or T5.6 is No, enforcement does not reach the screen under the real
-install, and that is worth fixing before Phase 6. See `issues.md` C11.
+If T5.5 or T5.6 is No, enforcement does not reach the screen under a real
+install. That does not stop a demo — run the agent by hand and the overlay
+behaves normally — but it is worth knowing, and worth being able to answer if a
+panel asks. See `issues.md` C11.
 
 ### T5.8 — Duplicate overlays from the watchdog *(new, `issues.md` C12)*
 
@@ -863,7 +865,9 @@ Integration should not start until:
 
 - [ ] Every Part 1–4 box is ticked, or its failure is logged in `issues.md`
 - [ ] T5.1, T5.2 and T5.3 pass
-- [ ] T5.5 and T5.6 are answered — **not** left blank
+- [ ] T5.5 and T5.6 are answered — **not** left blank. They gate a real
+      install rather than the demonstration, so a No here is a finding to state,
+      not a reason to stop
 - [ ] The isolated-network constraint is still true (auth is still a stub)
 
 ---

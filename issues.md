@@ -23,10 +23,15 @@ assuming X was overlooked.
 Phases 0–4 are complete. Packaging moved to Phase 8 (see C2), and Phase 5 is
 manual per-system verification.
 
-**Currently blocking: C11.** Enforcement may never reach the user's screen under
-the service install, and it cannot be measured without elevation — so it gates
-Phase 6, not Phase 5. Everything left in section A is policy you can settle at
-any point before deployment.
+**Scope: a project defence, demonstrated on VMs.** Not a deployment. That is
+what makes A2 inapplicable for now, and it changes what C11 blocks — a
+hand-run agent shows the overlay normally, so the demo path never enters
+session 0. C11 gates a real *install*, not the demonstration.
+
+**Currently blocking: nothing for the defence.** C1 (authentication accepts
+anyone) and C11 (enforcement may not reach the screen under a service install)
+both gate deployment, and both are worth being able to answer questions about
+rather than being caught by.
 
 **Numbering.** The letter is the section, so an item's letter changes when its
 status does — C13 became B21 when it was fixed. The number is allocation order,
@@ -53,20 +58,31 @@ activity records to be kept.
 Change it with `ENGINE_RETENTION_DAYS`, or set `ENGINE_RETENTION_DAYS=0` to
 disable pruning entirely (the Engine logs a warning when you do).
 
-### A2. Institutional approval for monitoring real machines
+### A2. Institutional approval — **not applicable at current scope**
 
-The system captures screenshots on demand, logs USB insertions, tracks every
-running application and window title, and can lock users out of a machine.
-Pointing it at real lab computers used by real students is a different
-proposition from demonstrating it on your own hardware.
+**Current scope is a project defence, demonstrated entirely on VMs.** No real
+lab machine, no real student, no institutional deployment. Nothing needs
+approving to build, test or present it, and this entry is not blocking anything.
 
-Most institutions require ethics review or IT sign-off before deploying
-something like this, and the README's own "Removed Features" section shows the
-project already reasoned about privacy — keylogging was cut on exactly these
-grounds. Worth confirming what approval you need **before** Phase 5 testing,
-not after.
+Recorded because the requirement is real at a different scope, and because a
+defence panel may well ask about it. The system captures screenshots on demand,
+logs USB insertions, tracks every running application and window title, and can
+lock a user out of a machine. Pointed at real computers used by real people,
+that is the kind of thing most institutions gate behind ethics review or IT
+sign-off. The README's "Removed Features" section shows the project already
+reasoned this way once — keylogging was cut on exactly these grounds, and that
+is a good answer to give if asked.
 
-Nothing in the code depends on this; it gates where you are allowed to run it.
+**What would make this live:**
+
+- A pilot on real lab machines, even a handful, even voluntarily — the moment
+  the monitored person is not you.
+- A sale or institutional trial. At that point approval is the buyer's process
+  to run, but they will expect the software to have answers ready: what is
+  collected, how long it is kept (A1), who can see it (D5), and what the
+  monitored person is told.
+
+Nothing in the code depends on this; it gates where you are allowed to point it.
 
 ### A3. How the master secret and per-client keys get onto machines
 
@@ -854,7 +870,7 @@ bundled runtime and the helper executables. Those are spawned on demand rather
 than resident, so idle footprint may still be close to the estimate — but it
 has never been measured. Measure in Phase 6 rather than restating the number.
 
-### C11. Enforcement may never reach the user's screen under the service install — *unverified, blocks Phase 5* — **CANNOT BE VERIFIED FROM HERE**
+### C11. Enforcement may never reach the user's screen under the service install — *unverified; gates deployment, not the defence*
 
 Surfaced while checking whether two overlays could collide in production. The
 collision cannot happen with one agent per machine (B24), but chasing where the
@@ -889,8 +905,14 @@ that has never been tested, which is precisely what Phase 5 exists to catch.
 **Why this entry is not marked verified**: creating a service and a Scheduled
 Task needs elevation, so this could not be settled from a normal session. The
 reasoning is from documented Windows behaviour, not measurement. **Do not act on
-it until it is measured** — `testing.md` T5.5–T5.7 are the tests, and they are
-gating items for Phase 6.
+it until it is measured** — `testing.md` T5.5–T5.7 are the tests.
+
+**What it does and does not block.** At the current scope — a defence
+demonstrated on VMs — it blocks nothing: run the agent by hand in the VM's
+logged-in session, as every test to date has, and the overlay behaves normally
+because session 0 never enters into it. It blocks a real *install*, where the
+agent runs as a service. Worth measuring before Phase 6 all the same, since it
+is cheap once a VM exists and it is the kind of question a panel may ask.
 
 If confirmed, the fix is not small: getting a window into the active session
 needs `WTSGetActiveConsoleSessionId` plus `CreateProcessAsUser` with a

@@ -362,7 +362,8 @@ To run by hand:
       and the watchdog both run as SYSTEM in session 0, which is isolated from
       the interactive desktop — so the overlay may be invisible while every log
       line reports success ([issues.md](issues.md) C11). Needs elevation, so it
-      could not be settled from a dev session. **Gating for Phase 6.**
+      could not be settled from a dev session. Gates a real *install*, not the
+      defence demo, which runs the agent by hand.
 - [ ] Duplicate overlays from a watchdog pass ([issues.md](issues.md) C12,
       verified) — observe the count, then fix once C11 is measured
 
