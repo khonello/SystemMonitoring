@@ -37,6 +37,32 @@ times as you like.
 and HMAC-protected. A stale VM clock makes block windows look expired or not yet
 started, which reads exactly like an enforcement bug.
 
+## The Hyper-V VM
+
+Full build in [testing.md](testing.md) §0.1d. Three things worth knowing without
+looking them up:
+
+**The vTPM is off by default and Setup will not tell you.** Generation 2 VMs have
+a virtual TPM, but the creation wizard never offers it, and Windows 11 stops with
+a generic *"This PC can't run Windows 11"* naming no requirement. Tick it at
+**VM → Settings → Security → Enable Trusted Platform Module**, with the VM shut
+down.
+
+**The network adapter is changeable at any time**, at **VM → Settings → Network
+Adapter**. Install on *Default Switch* so OOBE and `pip` have internet, then
+switch to *Not Connected* once provisioning is done — Phase 5 needs no network
+(§0.1c). Leave the **WSL** switch alone despite the Engine living there: WSL
+creates and reconfigures it, not you.
+
+**The Default Switch address changes when the host reboots.** It is NAT, so the
+host's `vEthernet (Default Switch)` address is not stable. Re-read it rather than
+recording it once, or the port proxy and `--engine` will point at yesterday's
+address:
+
+```powershell
+Get-NetIPAddress -InterfaceAlias "vEthernet (Default Switch)" -AddressFamily IPv4
+```
+
 ## Things that fail silently
 
 **`--id` must match everywhere.** `STATE_DIR` is derived from `CLIENT_ID`, so the

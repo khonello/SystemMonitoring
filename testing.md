@@ -272,7 +272,7 @@ Use a key if you have one through your institution; do not buy one for this.
 | Setting | Value | Why |
 |---|---|---|
 | Generation | **2** | Windows 11 requires UEFI |
-| Security → Trusted Platform Module | **enabled** | Win11 requires TPM 2.0; a Gen 2 VM has a virtual one but it is **off by default**, and Setup stops with "This PC can't run Windows 11" |
+| Security → Trusted Platform Module | **enabled** | Win11 requires TPM 2.0. A Gen 2 VM has a virtual one, but the creation wizard never offers it and it is **off by default**, so Setup stops with a generic "This PC can't run Windows 11" naming no requirement. Tick it at *VM → Settings → Security*, with the VM shut down — after the wizard, before first boot |
 | Secure Boot | on, template *Microsoft Windows* | Win11 requirement |
 | Memory | 4096 MB startup | Win11 minimum |
 | Virtual processors | 2 | Win11 minimum |
