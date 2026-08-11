@@ -942,11 +942,40 @@ second.
 So the answer is not "do not run as a service". It is "when this service needs to
 reach a human, cross into their session deliberately".
 
-If confirmed, that means `WTSGetActiveConsoleSessionId` plus `WTSQueryUserToken`
-and `CreateProcessAsUser` around the two helper launches, and writing the policy
-to the logged-on user's hive rather than to `HKCU`. Or moving those launches to a
-task registered to run as the logged-on user. Decide after measuring, not
-before.
+**Two ways to fix it, if it needs fixing.** The session-1 program already exists
+— `overlay_app.py` is a standalone executable that only draws a window. The
+question is who starts it and when.
+
+- **A — a persistent per-user helper**, auto-started at logon in the user's
+  session, told what to do by the service over IPC. The standard pattern for
+  products with a lot of per-user UI.
+- **B — the service starts the existing helper in session 1 on demand**:
+  `WTSGetActiveConsoleSessionId`, `WTSQueryUserToken`, `DuplicateTokenEx`,
+  `CreateEnvironmentBlock`, then `CreateProcessAsUser` with
+  `lpDesktop="winsta0\default"`. Argv stays the channel.
+
+**B is the better fit here**, for two reasons that are specific to this system
+rather than general:
+
+- **A puts a killable process in the adversary's own session.** The helper runs
+  as the monitored user, with their privileges, and before a block starts Task
+  Manager is available. Kill it and no overlay ever appears. The service can
+  notice, but restarting it in their session needs `CreateProcessAsUser` anyway
+  — so A does not avoid the token code, it adds a component in front of it.
+- **A needs an authenticated IPC channel.** A pipe the service uses to say "show
+  the overlay" is a pipe someone could use to say "close the overlay". That is
+  securable with a DACL, but it introduces a trust boundary into the component
+  whose whole job is resisting the local user — the same category of work as C1.
+
+B also fixes the `HKEY_CURRENT_USER` half for free: a process launched with the
+user's token loads that user's hive. And it keeps helpers spawned on demand
+rather than resident, which the README states as a design property.
+
+Size: roughly one function and two call sites, ~60–80 lines. `pywin32==312` is
+already declared in `requirements-client.txt` — though note it is currently
+**declared but unused**: nothing imports it, and every Windows-specific path in
+the client goes through `ctypes` or `winreg` instead. Decide after measuring,
+not before.
 
 ---
 
