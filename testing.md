@@ -201,10 +201,9 @@ T5.5–T5.8 from one careful attempt into something you can repeat until you
 understand it, which is the difference between measuring the session-0 question
 and guessing at it.
 
-**Networking.** Give the VM an **External** virtual switch so it gets a real LAN
-address, and set `networkingMode=mirrored` in `.wslconfig` on the host so the
-Engine inside WSL is reachable at the host's address. §0.2 then applies to the
-VM exactly as written for Laptop B — including `Test-NetConnection` as the gate.
+**Networking.** Default Switch and the §0.2 port proxy, set out in §0.1d and
+§0.2 — including `Test-NetConnection` as the gate. An External switch is only
+worth it if you also want the VM on the LAN for its own sake.
 
 **When the physical laptop is still worth it.** A VM cannot tell you about real
 Wi-Fi behaviour, roaming, a dock changing the adapter, or a genuinely separate
@@ -322,29 +321,13 @@ Take a second checkpoint named **"pre-service"** immediately before T5.4's
 `install_service`, and revert to it after each attempt. That is the whole reason
 the VM is worth its two hours.
 
-### 0.2 Reaching WSL from the VM (or from a second laptop)
+### 0.2 Reaching WSL from the VM
 
-*Skip this if `networkingMode=mirrored` in §0.1 already worked — check with
-`Test-NetConnection` first.*
-
-WSL2 sits behind a NAT inside the host. `localhost` forwarding is what lets
-Windows-on-A reach it — but that does **not** extend to another machine. Left
+WSL2 sits behind its own NAT inside the host. `localhost` forwarding is what
+lets Windows-on-the-host reach it — and that does **not** extend to the VM. Left
 alone, the VM cannot see the Engine at all.
 
-Two ways to fix it. Try mirrored networking first; it is one line and removes
-the problem instead of working around it.
-
-**Option 1 — mirrored networking** (Windows 11 22H2+). In `%USERPROFILE%\.wslconfig`:
-
-```ini
-[wsl2]
-networkingMode=mirrored
-```
-
-Then `wsl --shutdown` and restart. WSL now shares the Windows network interface,
-so the Engine is reachable at the host's address directly.
-
-**Option 2 — port proxy.** From an **elevated** PowerShell on the host:
+**Use a port proxy.** From an **elevated** PowerShell on the host:
 
 ```powershell
 $wsl = (wsl -- hostname -I).Trim().Split()[0]
@@ -352,14 +335,23 @@ netsh interface portproxy add v4tov4 listenport=5000 listenaddress=0.0.0.0 conne
 netsh advfirewall firewall add rule name="LabMonitor Engine" dir=in action=allow protocol=TCP localport=5000
 ```
 
-The WSL IP changes on reboot, so this needs redoing. To undo:
+**The WSL address changes on reboot**, so this needs redoing — as does the
+Default Switch address the VM points at (§0.1d). Both are NAT ranges the host
+reassigns. To undo:
 
 ```powershell
 netsh interface portproxy delete v4tov4 listenport=5000 listenaddress=0.0.0.0
 netsh advfirewall firewall delete rule name="LabMonitor Engine"
 ```
 
-Either way, confirm from the VM before going further:
+**Not `networkingMode=mirrored`**, even though it is one line and looks like the
+tidier fix. It gives WSL the host's *real* interfaces, so an Engine that
+authenticates nobody ends up listening on whatever network the laptop is
+attached to, and it has nothing to share when the laptop is offline — which is
+how Phase 5 is meant to run (§0.1c). The proxy keeps the listener on the
+virtual network the VM uses.
+
+Confirm from the VM before going further:
 
 ```powershell
 Test-NetConnection <host-ip> -Port 5000
