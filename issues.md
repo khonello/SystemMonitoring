@@ -914,10 +914,39 @@ because session 0 never enters into it. It blocks a real *install*, where the
 agent runs as a service. Worth measuring before Phase 6 all the same, since it
 is cheap once a VM exists and it is the kind of question a panel may ask.
 
-If confirmed, the fix is not small: getting a window into the active session
-needs `WTSGetActiveConsoleSessionId` plus `CreateProcessAsUser` with a
-duplicated user token, or moving the launch to a task registered to run as the
-logged-on user. Decide after measuring, not before.
+**Where it comes from, and what it is not.** Running as **SYSTEM** is what lands
+in session 0 — not starting automatically. A Scheduled Task triggered at logon as
+the *logged-on user* also starts by itself and lives in that user's session. The
+two decisions are `sc create` with no `obj=` (defaults to LocalSystem) and
+`schtasks /RU SYSTEM` with no `/IT`.
+
+Underneath is a genuine conflict of requirements, not an oversight. The agent
+must survive logoff, start before anyone logs in, and resist being closed by the
+person being monitored — all of which say SYSTEM service. It must also put a
+window in front of one specific logged-in person, which says that person's
+session. Session 0 isolation exists precisely to stop the first from doing the
+second.
+
+**The affected surface is narrow**, which bounds the fix:
+
+| | Session 0 acceptable? |
+|---|---|
+| Process, network and USB collection | yes — no UI |
+| Command execution and scripts | yes |
+| Hosts-file website policy | yes, and better — it needs the privilege |
+| Schedule, state, watchdog logic | yes — files, not windows |
+| **Overlay** | no — needs the user's session |
+| **Warning dialog** | no — needs the user's session |
+| **`DisableTaskMgr`** (written to `HKEY_CURRENT_USER`) | no — needs the user's hive |
+
+So the answer is not "do not run as a service". It is "when this service needs to
+reach a human, cross into their session deliberately".
+
+If confirmed, that means `WTSGetActiveConsoleSessionId` plus `WTSQueryUserToken`
+and `CreateProcessAsUser` around the two helper launches, and writing the policy
+to the logged-on user's hive rather than to `HKCU`. Or moving those launches to a
+task registered to run as the logged-on user. Decide after measuring, not
+before.
 
 ---
 
