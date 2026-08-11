@@ -43,7 +43,7 @@ Stated up front so a green run is not over-read.
   no authentication behind it. TLS does not help: encryption without
   authentication only means the attacker's session is private too.
 
-  **Run offline.** Nothing here needs a network (§0.1c), so this exposure is
+  **Run offline.** Nothing here needs a network (section 0.1c), so this exposure is
   avoidable entirely rather than merely managed. Bind explicitly with `--host`
   if you want to be certain what is listening where.
 - **Running by hand is not running as a service.** Everything below runs in your
@@ -87,11 +87,11 @@ What the VM still needs:
 
 - **A route from the VM into WSL.** WSL2 sits behind its own NAT inside the
   host, so the Engine is not reachable from the VM by default. Use the **port
-  proxy** in §0.2 — it forwards from the host's own addresses, including the
+  proxy** in section 0.2 — it forwards from the host's own addresses, including the
   Default Switch one the VM talks to. (`networkingMode=mirrored` also solves it,
   but do not use it here: it puts WSL on the host's *real* interfaces, which
   exposes an unauthenticated Engine to whatever network you are on, and is
-  fragile offline. See §0.1c.)
+  fragile offline. See section 0.1c.)
 - **An inbound firewall rule for TCP 5000** on the host.
 - **The `certs/` directory copied in**, at the same relative path. Clients pin
   that exact certificate.
@@ -124,7 +124,7 @@ All three run on a single laptop: **two on Windows** (Administrator, Client
 Agent) **and one in WSL** (Engine). Nothing in Parts 1–3 needs a second machine,
 and the whole command path — registration, telemetry, policy, reports, the audit
 trail — works end to end this way. WSL2's localhost forwarding means the client
-reaches the Engine at `127.0.0.1:5000` with no setup at all, so §0.2 below can be
+reaches the Engine at `127.0.0.1:5000` with no setup at all, so section 0.2 below can be
 skipped entirely.
 
 What a single machine **cannot** test:
@@ -187,7 +187,7 @@ understand what you are seeing. C11 is worth poking at repeatedly.
   third-party hypervisor on the same host runs through a compatibility layer
   and gives up some speed. Hyper-V avoids paying that twice.
 - **Windows: free for this purpose.** A retail Windows 11 ISO installs and runs
-  unactivated indefinitely — see §0.1d.
+  unactivated indefinitely — see section 0.1d.
 - **Disk: 64 GB**, thin-provisioned so it only grows as used. That is Windows
   11's own minimum, not a comfort figure — Setup refuses less. Python plus
   PySide6 adds ~400 MB.
@@ -201,8 +201,8 @@ T5.5–T5.8 from one careful attempt into something you can repeat until you
 understand it, which is the difference between measuring the session-0 question
 and guessing at it.
 
-**Networking.** Default Switch and the §0.2 port proxy, set out in §0.1d and
-§0.2 — including `Test-NetConnection` as the gate. An External switch is only
+**Networking.** Default Switch and the section 0.2 port proxy, set out in section 0.1d and
+section 0.2 — including `Test-NetConnection` as the gate. An External switch is only
 worth it if you also want the VM on the LAN for its own sake.
 
 **When the physical laptop is still worth it.** A VM cannot tell you about real
@@ -253,7 +253,7 @@ then take it off the network and leave it there.
 
 One consequence: **do not use `networkingMode=mirrored` in this setup.** Mirrored
 mode hands WSL the host's real interfaces, which is both the exposure above and
-fragile with no interfaces to share. Use the port proxy in §0.2 instead — it
+fragile with no interfaces to share. Use the port proxy in section 0.2 instead — it
 forwards from the host's own addresses, including the Default Switch one the VM
 talks to, and works with the laptop entirely offline.
 
@@ -290,7 +290,7 @@ Default Switch reaches the host just as well and stays put. The adapter can be
 changed any time in *VM Settings → Network Adapter*.
 
 Note the Default Switch's address range **changes when the host reboots**, so
-re-read the host's `vEthernet (Default Switch)` address when you get to §0.2
+re-read the host's `vEthernet (Default Switch)` address when you get to section 0.2
 rather than recording it once.
 
 **Leave the network connected until provisioning is finished.** Windows 11 24H2
@@ -314,7 +314,7 @@ up, then take it down for good once the machine is provisioned.
 7. `python -m client --check` — should resolve an id, report three MISSING
    bundles, and say `agent running False`.
 8. **Disconnect the virtual network adapter.** Everything from here is offline
-   (§0.1c).
+   (section 0.1c).
 9. **Checkpoint: "baseline"**, before anything is installed as a service.
 
 Take a second checkpoint named **"pre-service"** immediately before T5.4's
@@ -336,7 +336,7 @@ netsh advfirewall firewall add rule name="LabMonitor Engine" dir=in action=allow
 ```
 
 **The WSL address changes on reboot**, so this needs redoing — as does the
-Default Switch address the VM points at (§0.1d). Both are NAT ranges the host
+Default Switch address the VM points at (section 0.1d). Both are NAT ranges the host
 reassigns. To undo:
 
 ```powershell
@@ -348,7 +348,7 @@ netsh advfirewall firewall delete rule name="LabMonitor Engine"
 tidier fix. It gives WSL the host's *real* interfaces, so an Engine that
 authenticates nobody ends up listening on whatever network the laptop is
 attached to, and it has nothing to share when the laptop is offline — which is
-how Phase 5 is meant to run (§0.1c). The proxy keeps the listener on the
+how Phase 5 is meant to run (section 0.1c). The proxy keeps the listener on the
 virtual network the VM uses.
 
 Confirm from the VM before going further:

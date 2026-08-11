@@ -75,7 +75,7 @@ box. Imports nothing but the standard library, so WSL needs no venv — and
 | `--host ADDR` | `ENGINE_HOST` | `0.0.0.0` | Address to **bind**. Note the asymmetry: on the Engine this is what to listen on; on the client and admin the same-named variable is what to *connect to*. |
 | `--port N` | `ENGINE_PORT` | `5000` | Listening port. |
 | `--db PATH` | `ENGINE_DB` | `monitoring.db` | SQLite file. The Engine owns all persistence; neither other unit has a database. |
-| `--retention-days N` | `ENGINE_RETENTION_DAYS` | `30` | Prune monitoring data older than N days. `0` disables pruning, and `--check` says so explicitly. The real retention period is an open decision (`issues.md` §A). |
+| `--retention-days N` | `ENGINE_RETENTION_DAYS` | `30` | Prune monitoring data older than N days. `0` disables pruning, and `--check` says so explicitly. The real retention period is an open decision (`issues.md` section A). |
 | `--no-tls` | `ENGINE_TLS=0` | off | Serve plaintext **even though** `certs/engine-cert.pem` exists. TLS is presence-based — it enables itself when the certificate is there, so there is no flag to forget — and this is the deliberate escape hatch. |
 | `--dev-bypass-auth` | `DEV_BYPASS_AUTH=1` | off | Skips the registration handshake *entirely*: no nonce is ever sent, so a forgotten flag is visible in a packet capture rather than passing quietly as a validation step. Logs a warning per peer. Development only. |
 | `-v`, `--verbose` | `ENGINE_LOG_LEVEL=DEBUG` | `INFO` | DEBUG surfaces heartbeats. |

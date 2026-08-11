@@ -20,7 +20,7 @@ did" without touching the network: `engine --check`, `client --check`,
 stub that accepts anyone (`issues.md` C1). Anyone who reaches port 5000 can
 register as an **admin** and issue commands. TLS does not help — encryption
 without authentication only means the attacker's session is private too. Phase 5
-needs no network at all, so run it offline. → [testing.md](testing.md) §0.1c
+needs no network at all, so run it offline. → [testing.md](testing.md) section 0.1c
 
 **Give the overlay a machine you are not using.** It covers the screen, disables
 Task Manager and re-asserts topmost every 500ms until its `--until` time. It
@@ -39,7 +39,7 @@ started, which reads exactly like an enforcement bug.
 
 ## The Hyper-V VM
 
-Full build in [testing.md](testing.md) §0.1d. Three things worth knowing without
+Full build in [testing.md](testing.md) section 0.1d. Three things worth knowing without
 looking them up:
 
 **The vTPM is off by default and Setup will not tell you.** Generation 2 VMs have
@@ -58,7 +58,7 @@ creation, so delete it and make a new Gen 2 VM.
 **The network adapter is changeable at any time**, at **VM → Settings → Network
 Adapter**. Install on *Default Switch* so OOBE and `pip` have internet, then
 switch to *Not Connected* once provisioning is done — Phase 5 needs no network
-(§0.1c). Leave the **WSL** switch alone despite the Engine living there: WSL
+(section 0.1c). Leave the **WSL** switch alone despite the Engine living there: WSL
 creates and reconfigures it, not you.
 
 **The Default Switch address changes when the host reboots.** It is NAT, so the
