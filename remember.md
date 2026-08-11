@@ -62,9 +62,8 @@ SYSTEM in session 0, isolated from the interactive desktop, so the overlay may
 render where nobody can see it while every log line reports success. Unverified;
 needs elevation. `testing.md` T5.5–T5.7 measure it.
 
-**C12 is a confirmed bug** — `overlay_running()` reads a per-process handle, so
-the watchdog cannot see the agent's overlay and launches a duplicate it can never
-stop. Measure C11 before fixing it; the right fix depends on the answer.
+**C12 and C14 are fixed** (now B25 and B26). The overlay holds its own lock in
+`STATE_DIR`, so every launcher can see it; `dialog_app --help` exits 0.
 
 **Check `issues.md` section D before "fixing" anything that looks missing.**
 Eight things there are decisions, not gaps.

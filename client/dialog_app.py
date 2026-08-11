@@ -147,8 +147,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         args = parser.parse_args(argv)
-    except SystemExit:
-        return EXIT_BAD_ARGS
+    except SystemExit as exc:
+        # argparse raises SystemExit(0) for --help and SystemExit(2) for a bad
+        # argument. Mapping both to EXIT_BAD_ARGS would make --help report
+        # failure, and this program's exit code is its answer channel.
+        return EXIT_BAD_ARGS if exc.code else EXIT_OK
 
     logging.basicConfig(level="INFO", format="%(asctime)s - %(levelname)s - %(message)s")
 

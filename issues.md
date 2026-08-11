@@ -568,6 +568,84 @@ different id runs unaffected, and an agent restarted seconds after the first
 was hard-killed acquires normally. Covered by seven tests in `tests/test_client.py`,
 including the kill-the-holder case, which is the crash-restart guarantee.
 
+### B25. `overlay_running()` was blind across processes — **DONE** (this was C12)
+
+`client/lockout.py` answered "is an overlay up?" from `_overlay`, a module-level
+`Popen` handle — per process, while two processes launch overlays for the same
+client id by design: the agent, and the Scheduled Task watchdog that exists as
+an independent check for when the agent hangs. A fresh process started with
+`_overlay = None`, so it reported False regardless of what was on screen and
+launched another one.
+
+**Measured before the fix**, two processes resolving one `CLIENT_ID` and running
+the shipped `enforce_once()` with only the launched argv swapped for a sleeper:
+
+```
+[agent]    overlay_running() before = False   after = True   launched pid 19796
+[watchdog] overlay_running() before = False   after = True   launched pid 21028
+```
+
+Worse than a duplicate: a watchdog pass is a one-shot process that exits
+immediately, orphaning its overlay, and every later pass started blind — so the
+release branch never stopped it. For a pause, whose overlay carries the pause's
+*internal* expiry as its end time, dropping the pause left the machine held with
+no countdown and nothing able to clear it.
+
+**Fixed**: the overlay holds a lock on `overlay.lock` in `STATE_DIR` for its own
+lifetime, so asking the lock answers for every launcher at once. Same mechanism
+as B24, which is why this was cheap — the guard was generalised to named locks
+rather than rewritten.
+
+**Measured after**, same probe, with the sleeper taking the lock as the real
+overlay now does:
+
+```
+[agent]    overlay_running() before = False  launched a process = True   owner 3836
+[watchdog] overlay_running() before = True   launched a process = False  owner 3836
+```
+
+Four things this turned up that were not obvious going in:
+
+- **The overlay had to hold the lock, not its launcher.** That is what makes it
+  answer "is a lockout on screen?" rather than "did *I* put one there?", and it
+  means an orphan whose launcher died is still visible to everyone.
+- **`stop_overlay` needed a cross-process path too.** Detecting an overlay you
+  cannot stop is only half a fix, so the holder records its pid beside the lock
+  and a launcher without a handle signals that. The lock stays the authority on
+  *whether* something is running; the pid is advisory and only says *what* to
+  signal.
+- **That path could kill the wrong process.** The first test run terminated the
+  suite itself with SIGTERM: any process holding the lock would have signalled
+  its own pid. `_stop_overlay_by_pid` now refuses to signal itself and releases
+  instead. Found by the tests, not by review.
+- **Mode transitions across processes are deliberately not handled.**
+  `_overlay_mode` is per-process too, so a watchdog seeing the agent's overlay
+  cannot tell whether its mode already matches. It leaves it alone rather than
+  restarting blind: a screen blocked in the wrong mode (a pause panel where a
+  countdown belongs) is a far smaller failure than one that flaps or doubles.
+  The launcher that owns an overlay still handles its own transitions. **What
+  would change this**: recording the mode beside the pid, once C11 has settled
+  whether this launch path survives at all.
+
+Also passes `--id` to the overlay explicitly rather than relying on environment
+inheritance, for the reason `install_service.py` bakes it into both command
+lines: the overlay resolves its own `STATE_DIR`, and a service or Scheduled Task
+cannot be assumed to pass anything down (B21).
+
+Covered by eight tests, including the self-signal guard and the cross-process
+detection.
+
+### B26. `dialog_app --help` exited 3 — **DONE** (this was C14)
+
+`main()` wrapped `parse_args` in `except SystemExit: return EXIT_BAD_ARGS`,
+which is right for a bad argument but also caught the `SystemExit(0)` argparse
+raises for `--help`. Cosmetic — the help text still printed — but for a program
+whose *answer is its exit code* it meant the code could not distinguish "asked
+for help" from "passed nonsense".
+
+**Fixed**: `return EXIT_BAD_ARGS if exc.code else EXIT_OK`. Found while checking
+that every command named in `commands.md` resolves.
+
 ### B11. Script import policy — **DONE** (this was A5)
 
 Answered: predefined scripts are standard library and `subprocess` only, no
@@ -818,73 +896,6 @@ If confirmed, the fix is not small: getting a window into the active session
 needs `WTSGetActiveConsoleSessionId` plus `CreateProcessAsUser` with a
 duplicated user token, or moving the launch to a task registered to run as the
 logged-on user. Decide after measuring, not before.
-
-### C12. `overlay_running()` is blind across processes — *verified*
-
-`client/lockout.py:234` answers "is an overlay up?" from `_overlay`, a
-module-level `subprocess.Popen` handle. That is **per process**, but two
-processes launch overlays for the same client id by design: the agent, and the
-Scheduled Task watchdog that exists as an independent check for when the agent
-hangs. Both call the same `enforce_once()` -> `start_overlay()`.
-
-A fresh process starts with `_overlay = None`, so `overlay_running()` returns
-False regardless of what is actually on screen, and `start_overlay` launches
-another one.
-
-**Measured**, not inferred. Two processes resolving the same `CLIENT_ID` and
-`STATE_DIR`, running the shipped `enforce_once()` with only the launched argv
-swapped for a sleeper so nothing took the screen:
-
-```
-[agent]    overlay_running() before = False   after = True   launched pid 19796
-[watchdog] overlay_running() before = False   after = True   launched pid 21028
-concurrent overlay processes: 2
-```
-
-The second process reported no overlay running while the first had one live for
-the same client, and started its own.
-
-Two consequences, the second worse than the first:
-
-- **The duplicate cannot be stopped.** A watchdog pass is a one-shot process
-  that exits immediately, orphaning its overlay, and every later pass starts
-  with `_overlay = None` — so `enforce_once`'s release branch
-  (`if overlay_running(): stop_overlay()`) never sees it. The orphan lives until
-  its own `--until`.
-- **For a pause, that outlives the pause.** An overlay started in pause mode
-  carries the pause's *internal* expiry as `--until` (capped at 1 hour). If the
-  admin drops the pause, the agent stops its own overlay and the orphan stays
-  up — with no countdown, no admin able to clear it, and the machine held until
-  a cap that was only ever meant as a safety net against the admin vanishing.
-  A watchdog pass fires every ~5 minutes, so any pause longer than that is
-  exposed.
-
-**Severity depends on C11.** If session-0 overlays are invisible, the symptom is
-invisible orphaned processes rather than fighting windows — still wrong, but a
-different fix. Measure C11 first.
-
-**Fix shape** (not yet written): the launch needs cross-process overlay
-detection, not the agent-level guard B24 added — the watchdog *should* launch an
-overlay when the agent is dead, that is its purpose. A lock file in `STATE_DIR`
-held by the overlay itself, checked before launching, is the same mechanism
-B24 already proved. `testing.md` T5.8 observes the current behaviour.
-
-### C14. `dialog_app --help` exits 3 — *cosmetic, one line*
-
-Found while checking that every command named in `commands.md` resolves.
-
-`client/dialog_app.py:148` wraps `parse_args` in `except SystemExit: return
-EXIT_BAD_ARGS`, which is right for a bad argument but also catches the
-`SystemExit(0)` argparse raises for `--help`. The help text still prints, so
-this is cosmetic — but for a program whose *answer is its exit code* (0
-acknowledged, 1 cancelled, 2 timed out, 3 bad arguments) it means the code
-cannot distinguish "the operator asked for help" from "the caller passed
-nonsense".
-
-**Fix**: `except SystemExit as exc: return EXIT_BAD_ARGS if exc.code else 0`.
-Left unfixed only because nothing calls `--help` programmatically; do it
-alongside the next change to that file. Documented in `commands.md` so the
-behaviour is not a surprise meanwhile.
 
 ---
 

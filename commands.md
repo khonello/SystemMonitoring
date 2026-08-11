@@ -188,7 +188,7 @@ Each has its own argparse and is spawned on demand, not persistently.
 | Command | Arguments | Purpose |
 |---|---|---|
 | `python -m client.watchdog` | `--id NAME` | One-shot lockout enforcement pass, independent of the agent. The installer runs it every ~5 min as SYSTEM. `--id` must match the agent's, or it reads the wrong state directory and releases a blocked machine. |
-| `python -m client.overlay_app` | `--until ISO` (**required**), `--mode scheduled\|pause`, `--message TEXT` | Fullscreen lockout overlay. `scheduled` shows a countdown; `pause` deliberately shows none. Exits 0 if `--until` has already passed, 2 if it is unparseable. ⚠️ **Takes over the screen and disables Task Manager** — ask before running it on a machine in use. |
+| `python -m client.overlay_app` | `--until ISO` (**required**), `--mode scheduled\|pause`, `--message TEXT`, `--id NAME` | Fullscreen lockout overlay. `scheduled` shows a countdown; `pause` deliberately shows none. Exits 0 if `--until` has already passed, 2 if it is unparseable, and 0 without showing anything if an overlay is already up for this client — it holds a lock in `STATE_DIR` so every launcher can see it (`issues.md` B25), which is what `--id` is for. ⚠️ **Takes over the screen and disables Task Manager** — ask before running it on a machine in use. |
 | `python -m client.dialog_app` | `--message TEXT` (**required**), `--title T`, `--timeout N` (default 60, `0` waits forever), `--allow-cancel` | Warning dialog. **The answer is the exit code**: `0` acknowledged, `1` cancelled, `2` timed out, `3` bad arguments. Note `--help` also exits 3 — argparse raises `SystemExit(0)` and the broad `except SystemExit` maps it to `EXIT_BAD_ARGS`. Cosmetic (the help text still prints), but it means the exit code cannot distinguish help from a genuine argument error. |
 | `python -m client.install_service` | `--startup auto\|demand\|delayed-auto`, `--uninstall` | Service, state-directory ACLs and watchdog Scheduled Task, in one step. Needs an elevated prompt. Takes no `--id` — it reads `CLIENT_ID` from config and bakes it into the command lines it registers. |
 
@@ -305,5 +305,5 @@ debugging an integration.
 | `python -m client --once` | Does collection actually work on this machine? |
 | `python -m admin --check` | What did the console resolve? |
 | `python -m admin --check-qml` | Does the QML tree load without warnings? |
-| `python -m pytest -q` | 270 tests. |
+| `python -m pytest -q` | 278 tests. |
 | `python -m scripts.bench_database` | What does a SQLite write cost here? |

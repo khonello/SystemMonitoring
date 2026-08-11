@@ -198,9 +198,10 @@ time.sleep(30)
 
 @pytest.fixture(autouse=True)
 def release_instance_lock():
-    """The guard holds a module-level handle; don't leak it between tests."""
+    """The guards hold module-level handles; don't leak them between tests."""
     yield
     single_instance.release()
+    single_instance.release(single_instance.OVERLAY_LOCK)
 
 
 def test_lock_lives_in_the_per_client_state_directory():
@@ -270,13 +271,113 @@ def test_an_unopenable_lock_still_lets_the_agent_start(monkeypatch):
     real_open = os.open
 
     def refuse_the_lock(path, *args, **kwargs):
-        if str(path).endswith(single_instance.LOCK_FILE):
+        if str(path).endswith(single_instance.AGENT_LOCK):
             raise PermissionError("state directory is not writable")
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr(single_instance.os, "open", refuse_the_lock)
 
     assert single_instance.acquire() is True
+
+
+def test_locks_are_independent_of_each_other():
+    """The agent lock and the overlay lock must not gate one another."""
+    assert single_instance.acquire(single_instance.AGENT_LOCK) is True
+    assert single_instance.acquire(single_instance.OVERLAY_LOCK) is True
+    assert single_instance.lock_path(single_instance.OVERLAY_LOCK).name == "overlay.lock"
+
+
+def test_is_held_reports_on_the_real_lock():
+    assert single_instance.is_held(single_instance.OVERLAY_LOCK) is False
+
+    single_instance.acquire(single_instance.OVERLAY_LOCK)
+    assert single_instance.is_held(single_instance.OVERLAY_LOCK) is True
+
+    single_instance.release(single_instance.OVERLAY_LOCK)
+    assert single_instance.is_held(single_instance.OVERLAY_LOCK) is False
+
+
+def test_owner_pid_is_recorded_and_cleared():
+    """Advisory, but it is how a process stops an overlay it did not launch."""
+    assert single_instance.owner_pid(single_instance.OVERLAY_LOCK) is None
+
+    single_instance.acquire(single_instance.OVERLAY_LOCK)
+    assert single_instance.owner_pid(single_instance.OVERLAY_LOCK) == os.getpid()
+
+    single_instance.release(single_instance.OVERLAY_LOCK)
+    assert single_instance.owner_pid(single_instance.OVERLAY_LOCK) is None
+
+
+# ---------------------------------------------------------------------------
+# Overlay visibility across processes (issues.md C12)
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_running_sees_an_overlay_this_process_did_not_start():
+    """The watchdog runs as its own process and must not launch a second one.
+
+    Before this, overlay_running() read only the per-process Popen handle, so a
+    fresh process reported False no matter what was actually on screen.
+    """
+    assert lockout.overlay_running() is False, "nothing running yet"
+
+    # Stands in for an overlay started by some other process: the lock is held,
+    # but this process has no handle for it.
+    single_instance.acquire(single_instance.OVERLAY_LOCK)
+
+    assert lockout.overlay_running() is True
+
+
+def test_start_overlay_does_not_launch_a_second_one(monkeypatch):
+    launches = []
+    monkeypatch.setattr(
+        lockout.subprocess, "Popen", lambda argv, *a, **k: launches.append(argv)
+    )
+
+    single_instance.acquire(single_instance.OVERLAY_LOCK)
+    lockout.start_overlay(datetime.now(timezone.utc) + timedelta(hours=1))
+
+    assert launches == [], "an overlay was already up for this client"
+
+
+def test_stop_overlay_can_stop_one_it_did_not_launch(monkeypatch, tmp_path):
+    """Releasing a machine has to mean releasing it, whoever put the overlay up."""
+    killed = []
+    monkeypatch.setattr(lockout.os, "kill", lambda pid, sig: killed.append(pid))
+
+    # A pid that is not ours, so this exercises the signalling path rather than
+    # the self-signal guard below.
+    single_instance.acquire(single_instance.OVERLAY_LOCK)
+    pid_file = tmp_path / "state" / (single_instance.OVERLAY_LOCK + ".pid")
+    pid_file.write_text("424242", encoding="utf-8")
+
+    assert lockout._overlay is None, "this process launched nothing"
+
+    lockout.stop_overlay()
+
+    assert killed == [424242], "should signal the pid recorded by the holder"
+
+
+def test_stop_overlay_never_signals_its_own_process():
+    """Signalling our own pid would kill the agent, not the overlay.
+
+    Found by this suite terminating itself with SIGTERM before the guard
+    existed.
+    """
+    single_instance.acquire(single_instance.OVERLAY_LOCK)
+    assert single_instance.owner_pid(single_instance.OVERLAY_LOCK) == os.getpid()
+
+    lockout.stop_overlay()  # must not raise, and must not signal us
+
+    assert single_instance.is_held(single_instance.OVERLAY_LOCK) is False
+
+
+def test_overlay_command_passes_the_client_id():
+    """Out-of-process readers must be told which client (issues.md B21)."""
+    argv = lockout._overlay_command(datetime.now(timezone.utc), OVERLAY_MODE_SCHEDULED)
+
+    assert "--id" in argv
+    assert argv[argv.index("--id") + 1] == lockout.CLIENT_ID
 
 
 # ---------------------------------------------------------------------------

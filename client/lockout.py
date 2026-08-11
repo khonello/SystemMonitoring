@@ -23,13 +23,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from client.config import OVERLAY_EXE_PATH
+from client import single_instance
+from client.config import CLIENT_ID, OVERLAY_EXE_PATH
 from client.state import PAUSE_FILE, SCHEDULE_FILE, StateTampered, read_state, write_state
 from common.constants import (
     MAX_BLOCK_HOURS,
@@ -232,7 +235,19 @@ def apply_pause_command(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def overlay_running() -> bool:
-    return _overlay is not None and _overlay.poll() is None
+    """Is a lockout overlay on screen for this client — started by anyone?
+
+    Deliberately not just `_overlay`: that is a per-process `Popen` handle, and
+    the agent is not the only launcher. The Scheduled Task watchdog runs as its
+    own process precisely so it can act when the agent has hung, and it would
+    see `_overlay is None` regardless of what is actually on screen (issues.md
+    C12). The overlay holds a lock in STATE_DIR for its own lifetime, so asking
+    the lock answers for every launcher at once.
+    """
+    if _overlay is not None and _overlay.poll() is None:
+        return True
+
+    return single_instance.is_held(single_instance.OVERLAY_LOCK)
 
 
 def _overlay_command(end: datetime, mode: str) -> list[str]:
@@ -241,7 +256,11 @@ def _overlay_command(end: datetime, mode: str) -> list[str]:
     Falls back to running the module with the current interpreter during
     development, before the Phase 8 packaging step has produced the exe.
     """
-    args = ["--until", end.isoformat(), "--mode", mode]
+    # --id is passed rather than left to environment inheritance for the same
+    # reason install_service.py bakes it into both command lines: the overlay
+    # resolves its own STATE_DIR, and a launcher that is a service or a
+    # Scheduled Task cannot be assumed to pass anything down (issues.md B21).
+    args = ["--until", end.isoformat(), "--mode", mode, "--id", CLIENT_ID]
 
     if OVERLAY_EXE_PATH.exists():
         return [str(OVERLAY_EXE_PATH), *args]
@@ -262,11 +281,22 @@ def start_overlay(end: datetime, mode: str = OVERLAY_MODE_SCHEDULED) -> bool:
     """
     global _overlay, _overlay_mode
 
-    if overlay_running():
+    if _overlay is not None and _overlay.poll() is None:
+        # Ours, so its mode is known and a transition can be made properly.
         if _overlay_mode == mode:
             return True
         logger.info("Overlay mode changing from %s to %s; restarting", _overlay_mode, mode)
         stop_overlay()
+
+    elif single_instance.is_held(single_instance.OVERLAY_LOCK):
+        # Someone else's — the agent's, if we are the watchdog. `_overlay_mode`
+        # is per-process, so we cannot tell whether its mode already matches,
+        # and restarting blind would tear down a working lockout to replace it
+        # with an identical one. Leave it: the launcher that owns it handles
+        # transitions, and a screen that is blocked in the wrong *mode* is a
+        # far smaller failure than one that flaps or ends up doubled.
+        logger.debug("An overlay is already up for this client; leaving it alone")
+        return True
 
     try:
         _overlay = subprocess.Popen(_overlay_command(end, mode))
@@ -294,6 +324,11 @@ def stop_overlay() -> None:
     _overlay_mode = None
 
     if _overlay is None:
+        # Nothing of ours to stop, but something may still be on screen — an
+        # overlay this process did not launch, or one orphaned when its launcher
+        # exited. Releasing a machine has to mean releasing it, so fall back to
+        # the pid the holder recorded beside its lock.
+        _stop_overlay_by_pid()
         return
 
     if _overlay.poll() is None:
@@ -308,6 +343,39 @@ def stop_overlay() -> None:
 
     _overlay = None
     logger.info("Lockout overlay stopped")
+
+
+def _stop_overlay_by_pid() -> None:
+    """Stop an overlay this process did not launch, if one is up.
+
+    The lock is the authority on whether anything is running; the pid file is
+    advisory and only says *what* to signal. If the pid is missing or already
+    gone, there is nothing further to do — the lock will be released by the
+    operating system either way.
+    """
+    if not single_instance.is_held(single_instance.OVERLAY_LOCK):
+        return
+
+    pid = single_instance.owner_pid(single_instance.OVERLAY_LOCK)
+    if pid is None:
+        logger.warning(
+            "An overlay is running but recorded no pid; cannot stop it from here"
+        )
+        return
+
+    if pid == os.getpid():
+        # Should not happen — launchers do not hold the overlay's lock, the
+        # overlay does. But signalling our own pid would take down the agent (or
+        # the watchdog) instead of the overlay, so refuse rather than trust it.
+        logger.warning("Overlay lock is held by this process; releasing instead")
+        single_instance.release(single_instance.OVERLAY_LOCK)
+        return
+
+    logger.info("Stopping an overlay started by another process (pid %s)", pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        logger.debug("Overlay pid %s was already gone", pid, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

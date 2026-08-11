@@ -517,7 +517,8 @@ echo $LASTEXITCODE
 ```
 
 The answer *is* the exit code: `0` acknowledged, `1` cancelled, `2` timed out,
-`3` bad arguments. Test all three of the first three.
+`3` bad arguments — and `0` for `--help`, fixed in `issues.md` B26. Test the
+first three.
 
 - [ ] **T4.1** acknowledged→0, cancelled→1, timeout→2
 
@@ -631,11 +632,12 @@ run one by hand:
 python -m client.watchdog --id <the agent's id>
 ```
 
-`overlay_running()` only sees overlays this *process* started, so the watchdog
-cannot tell the agent already has one up. Check Task Manager for a second
-`overlay_app` / `labmonitor-overlay` process.
+This used to launch a second overlay: `overlay_running()` only saw overlays the
+calling *process* had started. The overlay now holds a lock in `STATE_DIR`, so
+every launcher sees it (`issues.md` B25). Check Task Manager — there should be
+exactly **one** `overlay_app` / `labmonitor-overlay` process.
 
-- [ ] **T5.8** number of overlay processes after a watchdog pass: ______
+- [ ] **T5.8** number of overlay processes after a watchdog pass: ______ (expect 1)
 
 ---
 

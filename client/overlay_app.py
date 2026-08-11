@@ -269,9 +269,20 @@ def main(argv: list[str] | None = None) -> int:
         help="scheduled shows a countdown; pause deliberately shows none",
     )
     parser.add_argument("--message", default=None)
+    parser.add_argument(
+        "--id", metavar="NAME", dest="client_id",
+        help="Client id whose state directory holds the overlay lock (env "
+             "CLIENT_ID). Must match the agent's, or two overlays can end up "
+             "on one screen",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level="INFO", format="%(asctime)s - %(levelname)s - %(message)s")
+
+    # Set before importing anything that reads config: client.config resolves
+    # CLIENT_ID and STATE_DIR into module-level constants at import time.
+    if args.client_id:
+        os.environ["CLIENT_ID"] = args.client_id
 
     try:
         until = parse_until(args.until)
@@ -281,6 +292,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if until <= datetime.now(timezone.utc):
         logger.info("End time has already passed; nothing to show")
+        return 0
+
+    # Taken only once this invocation is actually going to show something, and
+    # held for the rest of the process. This is what lets any launcher — the
+    # agent, the watchdog, a hand-run command — ask "is a lockout already on
+    # screen?" without having started it. Second layer of defence: launchers
+    # check first, but two of them can race, and the loser has to lose here
+    # rather than putting a second window on the display.
+    from client import single_instance
+
+    if not single_instance.acquire(single_instance.OVERLAY_LOCK):
+        logger.info("An overlay is already on screen for this client; exiting")
         return 0
 
     message = args.message or (

@@ -8,11 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, and **`issues.md`** logs known bugs, deferred decisions and unverified claims. Read both before starting a phase — `issues.md` marks which items block which phase. **`commands.md`** is the operational CLI reference — every program, its flags, and why the entry points are split the way they are; keep it current when a flag changes, since unlike the README it is meant to track the code. **`testing.md`** is the Phase 5 manual test plan: the two-laptop topology, what to run on each unit, and what the result should look like.
 
-**Two open findings gate Phase 5/6, both about enforcement reaching the screen.** `issues.md` C11 (unverified, needs elevation to test): the agent's service and the watchdog task both run as SYSTEM in session 0, which is isolated from the interactive desktop — the overlay may render where the student cannot see it while every log line reports success. C12 (verified by measurement): `overlay_running()` reads a per-process `Popen` handle, so the watchdog cannot see an overlay the agent started and launches a duplicate it can then never stop. Measure C11 before fixing C12 — the right fix for C12 depends on the answer.
+**One open finding gates Phase 6.** `issues.md` C11, unverified and needing elevation to test: the agent's service and the watchdog task both run as SYSTEM in session 0, which is isolated from the interactive desktop — the overlay may render where the student cannot see it while every log line reports success. Nothing else is blocking.
+
+**Overlay duplication is fixed, and the shape of the fix matters (B25).** The overlay holds a lock in `STATE_DIR` for its own lifetime, so `overlay_running()` answers "is a lockout on screen?" for every launcher rather than "did *I* start one?". The holder records its pid beside the lock so a launcher without a handle can still stop it — and `_stop_overlay_by_pid` refuses to signal its own pid, because the first version terminated the test suite. Cross-process *mode* transitions are deliberately not handled: a watchdog cannot know the agent's overlay mode, and leaving a screen blocked in the wrong mode beats flapping or doubling it.
 
 **`issues.md` section D is "accepted limitations"** — things deliberately not built, each with what would change the decision. Check it before "fixing" something that looks missing: storage staying relational, no per-client partitioning, no client→Engine→same-client flow, the Engine staying stateless per message, telemetry fanning out to every admin, hosts-file whitelist approximation, one-off rather than recurring lockout schedules, and one machine being unable to simulate many *enforcing* clients are all decisions, not gaps.
 
-Phases 0–4 are complete: Engine, Administrator and Client Agent are all implemented and tested (270 tests). **Phase 5, manual per-system verification, is next.** Packaging was moved out of Phase 4 to Phase 8 (dead last) — packaging code that has never been proven on its target machine is the wrong order of work, and no design decisions remain in it. Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are for bringing a machine up, not for shipping, so Phase 5's results do not fully transfer to the packaged build.
+Phases 0–4 are complete: Engine, Administrator and Client Agent are all implemented and tested (278 tests). **Phase 5, manual per-system verification, is next.** Packaging was moved out of Phase 4 to Phase 8 (dead last) — packaging code that has never been proven on its target machine is the wrong order of work, and no design decisions remain in it. Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are for bringing a machine up, not for shipping, so Phase 5's results do not fully transfer to the packaged build.
 
 `issues.md` section A lists decisions only the user can make (retention period, institutional approval, TLS scope). Don't try to resolve those in code.
 
@@ -29,7 +31,7 @@ pip install -r requirements.txt -r requirements-admin.txt -r requirements-client
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                    # 270 tests
+.\.venv\Scripts\python.exe -m pytest -q                    # 278 tests
 .\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common --cov=admin
 .\.venv\Scripts\python.exe -m scripts.bench_database       # SQLite write cost
 ```
