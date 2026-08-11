@@ -55,7 +55,21 @@ Stated up front so a green run is not over-read.
 
 ## Part 0 — Setup
 
-### 0.1 Machine roles — the chosen setup
+### 0.0 Two topologies — pick by the hardware you have
+
+**A — WSL Engine, VM client** (sections 0.1–0.2). Works on the current laptop.
+Costs one Windows VM's disk, and one port proxy to bridge the two NATs between
+the VM and WSL.
+
+**B — two VMs on an isolated switch** (section 0.1e). Preferred once disk allows.
+Costs a second, very small VM and buys the removal of the port proxy, the moving
+NAT addresses, and the network exposure that follows from authentication still
+being a stub.
+
+Everything from Part 1 onward is identical under either. Only how the client
+reaches the Engine changes.
+
+### 0.1 Machine roles — topology A
 
 One physical laptop, three environments. The Engine is Linux-only by design, so
 WSL covers it without a second machine; the Client goes in a Hyper-V VM because
@@ -73,8 +87,9 @@ can be rolled back. Two sanity checks on it:
 
 - Putting the Admin in the VM and the Client on the host would be backwards —
   the Admin is the one that never needs reverting.
-- Running the Engine in its own Linux VM instead of WSL would work but buys
-  nothing: it is the same Linux, and WSL is the documented setup.
+- Running the Engine in its own Linux VM buys nothing *on this laptop*, where
+  disk is the constraint — it is the same Linux either way. It buys plenty once
+  disk is not: see topology B in section 0.1e.
 
 **Networking is simpler than it looks here**, because the protocol is
 client-initiated: the Client opens a persistent connection outward to the Engine
@@ -118,6 +133,91 @@ Not blockers, but do not read a failure here as a code fault.
   testing anything time-based.
 - **`--once` will report far fewer processes** than the ~212 seen on the host,
   with fewer window titles. That is a quiet VM, not a broken collector.
+
+### 0.1e Topology B — two VMs on an isolated switch (preferred)
+
+Once disk is not the constraint, run the Engine in its own Linux VM rather than
+WSL, with both VMs on a **Hyper-V Internal switch**:
+
+```
+  HOST: Admin  ──┐
+                 │  vEthernet (LabMonitor)   192.168.100.1
+                 ▼
+        ┌────────────────────────────────┐
+        │  Internal switch "LabMonitor"  │   no route to any real network
+        └───┬────────────────────┬───────┘
+            │ .2                 │ .3
+      ┌─────────────┐    ┌─────────────┐
+      │ Engine (Linux)│    │ Client (Win) │
+      └─────────────┘    └─────────────┘
+```
+
+**Internal, not Private.** A Private switch connects the VMs to each other but
+excludes the host — and the Admin runs on the host. Internal gives the host a
+`vEthernet (LabMonitor)` adapter on the same subnet.
+
+What this removes, which is the whole argument for it:
+
+- **No port proxy.** Client and Engine share a subnet; the client connects
+  straight to `192.168.100.2:5000`.
+- **No moving addresses.** Static IPs on a switch with no DHCP, so nothing to
+  re-read after a reboot — unlike both NAT ranges in topology A.
+- **The C1 exposure becomes structural.** An Internal switch has no route to any
+  real network, so an Engine that authenticates nobody is unreachable from Wi-Fi
+  *by construction* rather than by remembering to bind the right address. That
+  is the one that matters.
+- **Snapshots for the Engine too**, so `monitoring.db` can be reverted to a known
+  state between runs.
+
+It is also closer to what would ship: a plain Linux VM is a deployment target,
+where WSL2 is a development convenience nobody deploys to.
+
+**Sizing, and why the Admin stays on the host.** On a 16 GB machine:
+
+| | RAM |
+|---|---|
+| Host Windows + editor, browser, tooling | ~8 GB |
+| Client VM (Windows 11) | 4 GB |
+| Engine VM (Linux, **server install, no desktop**) | 1–2 GB |
+| Admin, on the host | ~0.4 GB |
+| | **~14 GB** |
+
+That fits. Making the Admin a *third* VM does not — a Windows VM running Qt
+wants another 4 GB and leaves the host nothing. Two VMs with the Admin on the
+host is also the right split on its own terms: the Admin is the one component
+that never needs reverting.
+
+Two things that turn "fits" into "comfortable":
+
+- **Install the Engine VM as a server, no desktop.** Ubuntu Server or a Debian
+  netinst: ~1 GB RAM, ~5 GB disk. The Engine is headless and standard-library
+  only, so a desktop would be pure overhead. `apt install python3` is the whole
+  dependency list.
+- **Dynamic Memory on the Windows client VM** (startup 4 GB, min 1 GB, max
+  4 GB), so Hyper-V reclaims what it is not using. Install with a static 4 GB
+  and switch afterwards — Windows Setup is happier that way.
+
+**32 GB** removes the arithmetic entirely and leaves room for a second client VM
+for multi-client testing (issues.md B21, D8). 16 GB is workable for the plan as
+written.
+
+**Setup order:**
+
+1. Hyper-V Manager → *Virtual Switch Manager* → **New → Internal** → name it
+   `LabMonitor`.
+2. Give each VM a **second** adapter on *Default Switch* for provisioning
+   internet, and remove it once each machine has its packages. That is what
+   keeps the lab network clean without fighting an offline install.
+3. Static addresses: host `192.168.100.1` on `vEthernet (LabMonitor)`, Engine
+   `.2`, Client `.3`, `/24`, no gateway.
+4. Engine: `python3 -m engine --check`, then serve. It binds `0.0.0.0`, which on
+   this VM means only the isolated switch.
+5. Client: `python -m client --engine 192.168.100.2`.
+6. Admin: `python -m admin --engine 192.168.100.2`.
+7. `certs/` copied to all three; the pinned identity `labmonitor-engine` means
+   the addresses above never appear in the certificate.
+
+Section 0.2 does not apply under this topology — there is no NAT to bridge.
 
 ### 0.1a One machine, if that is all you have
 
