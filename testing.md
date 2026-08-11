@@ -43,9 +43,10 @@ Stated up front so a green run is not over-read.
   no authentication behind it. TLS does not help: encryption without
   authentication only means the attacker's session is private too.
 
-  **Run offline.** Nothing here needs a network (section 0.1c), so this exposure is
-  avoidable entirely rather than merely managed. Bind explicitly with `--host`
-  if you want to be certain what is listening where.
+  **Bind it where only the VM can reach it.** Section 0.2 points the port proxy
+  at the Default Switch address rather than `0.0.0.0`, so port 5000 answers only
+  on the virtual network between the host and the VM — true whether or not the
+  laptop is online. Nothing here needs a real network either (section 0.1c).
 - **Running by hand is not running as a service.** Everything below runs in your
   own login session. A service runs in session 0, which may behave differently
   for anything that draws on screen — that is exactly what T5.4 exists to check.
@@ -313,8 +314,12 @@ up, then take it down for good once the machine is provisioned.
 6. Copy `certs/` in at the same relative path.
 7. `python -m client --check` — should resolve an id, report three MISSING
    bundles, and say `agent running False`.
-8. **Disconnect the virtual network adapter.** Everything from here is offline
-   (section 0.1c).
+8. **Leave the VM on Default Switch.** Do not disconnect the adapter: that link
+   is how the client reaches the Engine, and Part 5 needs it. "Offline" means
+   the *Engine* is not reachable from any real network, which section 0.2
+   achieves by binding the proxy to the Default Switch address rather than by
+   unplugging anything. (Disconnecting the adapter is still how T5.3 simulates
+   network loss — temporarily, on purpose.)
 9. **Checkpoint: "baseline"**, before anything is installed as a service.
 
 Take a second checkpoint named **"pre-service"** immediately before T5.4's
@@ -323,38 +328,79 @@ the VM is worth its two hours.
 
 ### 0.2 Reaching WSL from the VM
 
+Three environments, two NATs, and one link that needs building. What talks to
+what:
+
+```
+             HOST LAPTOP
+  ┌──────────────────────────────────────────┐
+  │  Admin (Windows)                         │
+  │      │                                   │
+  │      │ 127.0.0.1:5000                    │
+  │      │ WSL2 localhost forwarding         │
+  │      ▼                                   │
+  │  Engine (WSL)  ◄── port proxy ───┐       │
+  │                                  │       │
+  │        vEthernet (Default Switch)│       │
+  └──────────────────┬───────────────┴───────┘
+                     │  172.x.x.1:5000
+                     │  Hyper-V Default Switch (NAT)
+                     ▼
+              ┌─────────────┐
+              │ Client (VM) │
+              └─────────────┘
+```
+
+- **Admin → Engine** needs no setup. Both are on the host, and WSL2 forwards
+  `localhost`, so the Admin connects to `127.0.0.1:5000`. The Default Switch is
+  not involved at all.
+- **Client → Engine** is the link that needs building. The VM reaches the host
+  on the Default Switch address, but the Engine is not on the Windows host — it
+  is inside WSL, behind a second NAT. The port proxy below bridges the two.
+- **Client → Admin never happens.** They never speak directly; every command and
+  every telemetry message goes through the Engine. So there is nothing to
+  configure between the VM and the Admin.
+- The Default Switch also NATs the VM out to the internet through the host. Same
+  adapter, different destination — useful during provisioning, irrelevant after.
+
 WSL2 sits behind its own NAT inside the host. `localhost` forwarding is what
 lets Windows-on-the-host reach it — and that does **not** extend to the VM. Left
 alone, the VM cannot see the Engine at all.
 
-**Use a port proxy.** From an **elevated** PowerShell on the host:
+**Use a port proxy, bound to the Default Switch address — not to `0.0.0.0`.**
+From an **elevated** PowerShell on the host:
 
 ```powershell
-$wsl = (wsl -- hostname -I).Trim().Split()[0]
-netsh interface portproxy add v4tov4 listenport=5000 listenaddress=0.0.0.0 connectport=5000 connectaddress=$wsl
+$wsl  = (wsl -- hostname -I).Trim().Split()[0]
+$host_ip = (Get-NetIPAddress -InterfaceAlias "vEthernet (Default Switch)" -AddressFamily IPv4).IPAddress
+
+netsh interface portproxy add v4tov4 listenport=5000 listenaddress=$host_ip connectport=5000 connectaddress=$wsl
 netsh advfirewall firewall add rule name="LabMonitor Engine" dir=in action=allow protocol=TCP localport=5000
 ```
 
-**The WSL address changes on reboot**, so this needs redoing — as does the
-Default Switch address the VM points at (section 0.1d). Both are NAT ranges the host
-reassigns. To undo:
+`listenaddress` is what makes this safe rather than merely working. Bound to
+`0.0.0.0` the proxy answers on *every* host interface, so an Engine that
+authenticates nobody would be reachable from whatever Wi-Fi the laptop is on.
+Bound to the Default Switch address it answers only on the virtual network
+between the host and the VM — which is the only place it is needed, and is true
+whether or not the laptop is online.
+
+That is also why **`networkingMode=mirrored` is the wrong fix here** despite
+being one line: it gives WSL the host's real interfaces, which is exactly the
+exposure this avoids.
+
+**Both NAT addresses change when the host reboots** — the WSL one and the
+Default Switch one — so this needs redoing after a restart. To undo:
 
 ```powershell
-netsh interface portproxy delete v4tov4 listenport=5000 listenaddress=0.0.0.0
+netsh interface portproxy delete v4tov4 listenport=5000 listenaddress=$host_ip
 netsh advfirewall firewall delete rule name="LabMonitor Engine"
 ```
 
-**Not `networkingMode=mirrored`**, even though it is one line and looks like the
-tidier fix. It gives WSL the host's *real* interfaces, so an Engine that
-authenticates nobody ends up listening on whatever network the laptop is
-attached to, and it has nothing to share when the laptop is offline — which is
-how Phase 5 is meant to run (section 0.1c). The proxy keeps the listener on the
-virtual network the VM uses.
-
-Confirm from the VM before going further:
+Confirm from inside the VM before going further, using that same host address:
 
 ```powershell
-Test-NetConnection <host-ip> -Port 5000
+Test-NetConnection <default-switch-ip> -Port 5000
 ```
 
 `TcpTestSucceeded : True` is the gate. If it is False, nothing in Part 5 will
