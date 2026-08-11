@@ -44,9 +44,16 @@ looking them up:
 
 **The vTPM is off by default and Setup will not tell you.** Generation 2 VMs have
 a virtual TPM, but the creation wizard never offers it, and Windows 11 stops with
-a generic *"This PC can't run Windows 11"* naming no requirement. Tick it at
-**VM → Settings → Security → Enable Trusted Platform Module**, with the VM shut
-down.
+a generic *"This PC can't run Windows 11"* naming no requirement.
+
+Hyper-V Manager → select the VM → shut it down (the box is greyed out while it
+runs) → *Settings…* → **Hardware → Security** → *Encryption Support* → tick
+**Enable Trusted Platform Module**. Check *Secure Boot* on the same page is on
+with template *Microsoft Windows*.
+
+No **Security** node means the VM is **Generation 1** — no UEFI, no Secure Boot,
+no vTPM, and Windows 11 will not install. Generation cannot be changed after
+creation, so delete it and make a new Gen 2 VM.
 
 **The network adapter is changeable at any time**, at **VM → Settings → Network
 Adapter**. Install on *Default Switch* so OOBE and `pip` have internet, then
