@@ -112,6 +112,12 @@ SYSTEM in session 0, isolated from the interactive desktop, so the overlay may
 render where nobody can see it while every log line reports success. Needs
 elevation. `testing.md` T5.5–T5.7 measure it. Gates a real install; see Scope.
 
+**C15: the session-0 fix is written but its success path has never run.** The
+overlay is launched into the interactive session when, and only when, the agent
+is in session 0; everywhere else the old spawn is used unchanged, and every
+failure falls back to it. If T5.5 shows the overlay was visible from a service
+all along, delete it rather than keeping it.
+
 **C12 and C14 are fixed** (now B25 and B26). The overlay holds its own lock in
 `STATE_DIR`, so every launcher can see it; `dialog_app --help` exits 0.
 

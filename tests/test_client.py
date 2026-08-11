@@ -197,6 +197,15 @@ time.sleep(30)
 
 
 @pytest.fixture(autouse=True)
+def reset_overlay_globals():
+    """start_overlay sets module state; don't leak it between tests."""
+    yield
+    lockout._overlay = None
+    lockout._overlay_pid = None
+    lockout._overlay_mode = None
+
+
+@pytest.fixture(autouse=True)
 def release_instance_lock():
     """The guards hold module-level handles; don't leak them between tests."""
     yield
@@ -350,6 +359,88 @@ def test_launching_from_session_zero_is_flagged(monkeypatch, caplog):
 
     assert "session 0" in caplog.text
     assert "C11" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Cross-session launch (issues.md C15)
+# ---------------------------------------------------------------------------
+#
+# The success path needs a real service in session 0, so what is pinned here is
+# every way it can fail and what the caller does about it. Those are the paths
+# that run in production the day the fix is wrong.
+
+
+@windows_only
+def test_crossing_is_refused_without_the_privilege():
+    """From an ordinary account this must decline, not raise.
+
+    WTSQueryUserToken needs SYSTEM. Verified against the real API rather than a
+    mock, so the library, the prototypes and the session lookup are all
+    exercised - only the privileged step is not.
+    """
+    assert session.spawn_in_active_session(["cmd", "/c", "exit"]) is None
+
+
+@windows_only
+def test_pid_liveness():
+    assert session.pid_is_running(os.getpid()) is True
+    assert session.pid_is_running(999_999) is False
+
+
+def test_ordinary_session_never_attempts_a_crossing(monkeypatch):
+    """The cost of this feature to the path everything actually uses: none."""
+    monkeypatch.setattr(session, "in_services_session", lambda: False)
+    monkeypatch.setattr(
+        session, "spawn_in_active_session",
+        lambda argv: pytest.fail("must not attempt a crossing outside session 0"),
+    )
+    launched = []
+    monkeypatch.setattr(lockout.subprocess, "Popen", lambda argv, *a, **k: launched.append(argv))
+
+    lockout.start_overlay(datetime.now(timezone.utc) + timedelta(hours=1))
+
+    assert len(launched) == 1
+
+
+def test_failed_crossing_falls_back_to_an_ordinary_spawn(monkeypatch, caplog):
+    """A fault here must never be why a lockout does not launch."""
+    monkeypatch.setattr(session, "in_services_session", lambda: True)
+    monkeypatch.setattr(session, "spawn_in_active_session", lambda argv: None)
+    launched = []
+    monkeypatch.setattr(lockout.subprocess, "Popen", lambda argv, *a, **k: launched.append(argv))
+
+    with caplog.at_level("WARNING"):
+        assert lockout.start_overlay(datetime.now(timezone.utc) + timedelta(hours=1)) is True
+
+    assert len(launched) == 1, "must still spawn"
+    assert "session 0" in caplog.text, "and must say the screen may not show it"
+
+
+def test_successful_crossing_tracks_the_pid_instead_of_a_handle(monkeypatch):
+    monkeypatch.setattr(session, "in_services_session", lambda: True)
+    monkeypatch.setattr(session, "spawn_in_active_session", lambda argv: 4242)
+    monkeypatch.setattr(
+        lockout.subprocess, "Popen",
+        lambda *a, **k: pytest.fail("should not spawn locally after a crossing"),
+    )
+
+    assert lockout.start_overlay(datetime.now(timezone.utc) + timedelta(hours=1)) is True
+    assert lockout._overlay is None
+    assert lockout._overlay_pid == 4242
+
+
+def test_a_crossed_overlay_can_be_stopped(monkeypatch):
+    monkeypatch.setattr(session, "in_services_session", lambda: True)
+    monkeypatch.setattr(session, "spawn_in_active_session", lambda argv: 4242)
+    monkeypatch.setattr(lockout.subprocess, "Popen", lambda *a, **k: None)
+    killed = []
+    monkeypatch.setattr(lockout.os, "kill", lambda pid, sig: killed.append(pid))
+
+    lockout.start_overlay(datetime.now(timezone.utc) + timedelta(hours=1))
+    lockout.stop_overlay()
+
+    assert killed == [4242]
+    assert lockout._overlay_pid is None
 
 
 # ---------------------------------------------------------------------------

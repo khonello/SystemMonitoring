@@ -51,6 +51,11 @@ WATCHDOG_INTERVAL = 30
 _overlay: subprocess.Popen[bytes] | None = None
 _overlay_mode: str | None = None
 
+# Set instead of _overlay when the overlay was launched across sessions, which
+# yields a bare pid rather than a Popen (issues.md C15). Exactly one of the two
+# is ever set.
+_overlay_pid: int | None = None
+
 
 # ---------------------------------------------------------------------------
 # Schedule
@@ -247,6 +252,11 @@ def overlay_running() -> bool:
     if _overlay is not None and _overlay.poll() is None:
         return True
 
+    # A cross-session launch has no Popen to poll, and the child needs a moment
+    # to take the lock — so the pid covers the window the lock cannot.
+    if _overlay_pid is not None and session.pid_is_running(_overlay_pid):
+        return True
+
     return single_instance.is_held(single_instance.OVERLAY_LOCK)
 
 
@@ -279,9 +289,9 @@ def start_overlay(end: datetime, mode: str = OVERLAY_MODE_SCHEDULED) -> bool:
     a pause deliberately does not. Switching between them means replacing the
     window rather than leaving a countdown running under a pause.
     """
-    global _overlay, _overlay_mode
+    global _overlay, _overlay_mode, _overlay_pid
 
-    if _overlay is not None and _overlay.poll() is None:
+    if overlay_running() and (_overlay is not None or _overlay_pid is not None):
         # Ours, so its mode is known and a transition can be made properly.
         if _overlay_mode == mode:
             return True
@@ -298,13 +308,25 @@ def start_overlay(end: datetime, mode: str = OVERLAY_MODE_SCHEDULED) -> bool:
         logger.debug("An overlay is already up for this client; leaving it alone")
         return True
 
-    # The overlay is the one thing here that has to be *seen*. Say so at the
-    # moment of launch if this process cannot show it, rather than letting the
-    # success log below stand unqualified (issues.md C11).
-    session.warn_if_invisible("The lockout overlay")
+    argv = _overlay_command(end, mode)
+
+    # From session 0 an ordinary spawn produces a window on a desktop with no
+    # display attached, so try to launch into the interactive session instead
+    # (issues.md C11, C15). Failure is not fatal: it falls through to the
+    # ordinary spawn, which is exactly what happened before this existed.
+    crossed = session.spawn_in_active_session(argv) if session.in_services_session() else None
+    if crossed is None and session.warn_if_invisible("The lockout overlay"):
+        logger.warning("Falling back to an ordinary spawn; it may not be visible")
 
     try:
-        _overlay = subprocess.Popen(_overlay_command(end, mode))
+        if crossed is None:
+            _overlay = subprocess.Popen(argv)
+            _overlay_pid = None
+        else:
+            # No Popen to hold: lifecycle runs through the pid and the overlay's
+            # own lock, the same path an overlay started by another process uses.
+            _overlay = None
+            _overlay_pid = crossed
         _overlay_mode = mode
     except OSError:
         logger.exception("Could not launch the overlay")
@@ -324,9 +346,19 @@ def stop_overlay() -> None:
     watchdog exists is that the overlay may be wedged, and a wedged process
     will not honour a polite request.
     """
-    global _overlay, _overlay_mode
+    global _overlay, _overlay_mode, _overlay_pid
 
     _overlay_mode = None
+
+    if _overlay is None and _overlay_pid is not None:
+        # Launched across sessions: no handle, but we know which process.
+        pid, _overlay_pid = _overlay_pid, None
+        logger.info("Stopping the cross-session overlay (pid %s)", pid)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            logger.debug("Overlay pid %s was already gone", pid, exc_info=True)
+        return
 
     if _overlay is None:
         # Nothing of ours to stop, but something may still be on screen — an

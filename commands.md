@@ -305,5 +305,5 @@ debugging an integration.
 | `python -m client --once` | Does collection actually work on this machine? |
 | `python -m admin --check` | What did the console resolve? |
 | `python -m admin --check-qml` | Does the QML tree load without warnings? |
-| `python -m pytest -q` | 282 tests. |
+| `python -m pytest -q` | 288 tests. |
 | `python -m scripts.bench_database` | What does a SQLite write cost here? |

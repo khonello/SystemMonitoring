@@ -986,6 +986,53 @@ already declared in `requirements-client.txt` — though note it is currently
 the client goes through `ctypes` or `winreg` instead. Decide after measuring,
 not before.
 
+### C15. Cross-session launch is implemented but its success path is untested
+
+`client/session.spawn_in_active_session` launches the overlay into the
+interactive session from a service — `WTSGetActiveConsoleSessionId`,
+`WTSQueryUserToken`, `DuplicateTokenEx`, `CreateEnvironmentBlock`, then
+`CreateProcessAsUserW` on `winsta0\default`. `client/lockout.start_overlay`
+uses it when, and only when, the process is in session 0.
+
+**Built ahead of the measurement, deliberately**, so that if C11 turns out to be
+real the fix is already in place rather than being written under time pressure.
+The cost of being wrong is bounded by two properties:
+
+- **It cannot fire outside session 0.** `start_overlay` calls it only when
+  `in_services_session()` is true, so the path used in development, in the
+  demonstration and in every test is the unchanged `subprocess.Popen`. A test
+  pins that.
+- **Every failure returns None and falls through** to the ordinary spawn, which
+  is exactly the behaviour before this existed. A fault here can never be the
+  reason a lockout does not launch.
+
+**What is actually proven**, against the real APIs rather than mocks:
+
+- The library and prototype wiring, up to the privileged call. On an ordinary
+  account `WTSQueryUserToken` returns WinError 1314, *"A required privilege is
+  not held by the client"* — reaching that means the DLL, the argument types and
+  the session lookup are all correct.
+- `pid_is_running` against a live pid and a dead one.
+- The fallback, the no-crossing-outside-session-0 rule, pid tracking in place of
+  a `Popen`, and stopping a crossed overlay.
+
+**What is not proven**: the success path. It needs a service in session 0, which
+is T5.5–T5.7.
+
+Two bugs were caught by smoke-testing this locally, which is worth recording
+because both would have surfaced only in the VM and both look like permission
+problems:
+
+- `WTSGetActiveConsoleSessionId` is exported by **kernel32**, not wtsapi32,
+  despite the WTS prefix. Loading it from wtsapi32 raises `AttributeError`.
+- Without an explicit `restype`, ctypes assumes `int`, so the 64-bit `HANDLE`
+  from `OpenProcess` came back truncated. Every prototype is now declared.
+
+**If T5.5 shows the overlay is visible from a service anyway**, this is dead
+code and should be deleted along with the `in_services_session()` branch in
+`start_overlay` — not left in on the grounds that it might be useful. Removing
+it is a smaller change than adding it was.
+
 ---
 
 ## D — Accepted limitations

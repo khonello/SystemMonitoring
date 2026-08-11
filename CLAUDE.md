@@ -14,7 +14,7 @@ Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, an
 
 **`issues.md` section D is "accepted limitations"** — things deliberately not built, each with what would change the decision. Check it before "fixing" something that looks missing: storage staying relational, no per-client partitioning, no client→Engine→same-client flow, the Engine staying stateless per message, telemetry fanning out to every admin, hosts-file whitelist approximation, one-off rather than recurring lockout schedules, and one machine being unable to simulate many *enforcing* clients are all decisions, not gaps.
 
-Phases 0–4 are complete: Engine, Administrator and Client Agent are all implemented and tested (282 tests). **Phase 5, manual per-system verification, is next.** Packaging was moved out of Phase 4 to Phase 8 (dead last) — packaging code that has never been proven on its target machine is the wrong order of work, and no design decisions remain in it. Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are for bringing a machine up, not for shipping, so Phase 5's results do not fully transfer to the packaged build.
+Phases 0–4 are complete: Engine, Administrator and Client Agent are all implemented and tested (288 tests). **Phase 5, manual per-system verification, is next.** Packaging was moved out of Phase 4 to Phase 8 (dead last) — packaging code that has never been proven on its target machine is the wrong order of work, and no design decisions remain in it. Three code paths fall back to the running interpreter meanwhile and log a warning; those fallbacks are for bringing a machine up, not for shipping, so Phase 5's results do not fully transfer to the packaged build.
 
 `issues.md` section A lists decisions only the user can make (retention period, institutional approval, TLS scope). Don't try to resolve those in code.
 
@@ -31,7 +31,7 @@ pip install -r requirements.txt -r requirements-admin.txt -r requirements-client
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                    # 282 tests
+.\.venv\Scripts\python.exe -m pytest -q                    # 288 tests
 .\.venv\Scripts\python.exe -m pytest -q --cov=engine --cov=common --cov=admin
 .\.venv\Scripts\python.exe -m scripts.bench_database       # SQLite write cost
 ```
