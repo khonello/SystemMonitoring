@@ -18,7 +18,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 | 7 — Authentication | not started |
 | 8 — Packaging | not started |
 
-**288 tests passing.** Open problems and decisions live in
+**289 tests passing.** Open problems and decisions live in
 [issues.md](issues.md); section A there needs your input.
 
 **Packaging moved from Phase 4 to Phase 8** — packaging code that has never been

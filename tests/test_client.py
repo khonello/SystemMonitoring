@@ -371,6 +371,42 @@ def test_launching_from_session_zero_is_flagged(monkeypatch, caplog):
 
 
 @windows_only
+def test_every_win32_prototype_is_declared():
+    """Pins the bug class that cost an afternoon: an undeclared restype.
+
+    ctypes defaults restype to c_int, so a 64-bit HANDLE comes back truncated
+    and every later use of it fails looking like a permissions problem. This
+    asserts each call used for the cross-session launch has been given real
+    types, rather than asserting the one handle that happened to bite.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32, advapi32, userenv, wtsapi32 = session._win32()
+
+    # A list, not a dict: ctypes function pointers are not hashable.
+    expected = [
+        ("WTSGetActiveConsoleSessionId", kernel32.WTSGetActiveConsoleSessionId, wintypes.DWORD),
+        ("OpenProcess", kernel32.OpenProcess, wintypes.HANDLE),
+        ("GetExitCodeProcess", kernel32.GetExitCodeProcess, wintypes.BOOL),
+        ("CloseHandle", kernel32.CloseHandle, wintypes.BOOL),
+        ("WTSQueryUserToken", wtsapi32.WTSQueryUserToken, wintypes.BOOL),
+        ("DuplicateTokenEx", advapi32.DuplicateTokenEx, wintypes.BOOL),
+        ("CreateProcessAsUserW", advapi32.CreateProcessAsUserW, wintypes.BOOL),
+        ("CreateEnvironmentBlock", userenv.CreateEnvironmentBlock, wintypes.BOOL),
+        ("DestroyEnvironmentBlock", userenv.DestroyEnvironmentBlock, wintypes.BOOL),
+    ]
+
+    for name, function, restype in expected:
+        assert function.restype is restype, f"{name}: restype is {function.restype}"
+        assert function.argtypes is not None, f"{name}: argtypes not declared"
+
+    # The specific one that bit: a handle must never come back as the default
+    # c_int, which is 32-bit and silently truncates on 64-bit Windows.
+    assert kernel32.OpenProcess.restype is not ctypes.c_int
+
+
+@windows_only
 def test_crossing_is_refused_without_the_privilege():
     """From an ordinary account this must decline, not raise.
 

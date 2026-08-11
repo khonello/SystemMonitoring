@@ -1033,6 +1033,40 @@ code and should be deleted along with the `in_services_session()` branch in
 `start_overlay` — not left in on the grounds that it might be useful. Removing
 it is a smaller change than adding it was.
 
+### C16. Two HWND arguments are passed without prototypes — *latent, low risk*
+
+Found while auditing the codebase after C15's truncation bug, to see whether the
+same class existed elsewhere. Mostly it does not: `IsUserAnAdmin`,
+`GetLogicalDrives`, `GetDriveTypeW` and `GetTickCount` all return 32-bit values,
+where ctypes' `c_int` default is harmless, and none of them return a handle.
+
+Two places pass an `HWND` as a plain Python int with no `argtypes` declared:
+
+- `client/monitors/process_monitor.py` — `IsWindowVisible`,
+  `GetWindowTextLengthW`, `GetWindowTextW` inside `_enumerate_windows`.
+- `client/ui_host.py:126` — `SetWindowPos` in `force_topmost`.
+
+ctypes converts an undeclared argument to `c_int`, so a window handle above 2^32
+would be truncated. **Empirically fine today**: HWND values on 64-bit Windows are
+small handle-table indices, which is why window-title collection returns 212
+processes with titles and why the overlay's topmost re-assert works.
+
+**Not fixed yet, deliberately.** Both sites are in code that has been verified
+working by hand, and the fix would be made immediately before a test run rather
+than after one. Declare `argtypes`/`restype` on those four calls, then re-run
+`python -m client --once` and check the window-title count has not changed, and
+run the overlay to confirm it still comes forward.
+
+Prevented from recurring in the new code by
+`test_every_win32_prototype_is_declared`, which asserts every call used for the
+cross-session launch has real types rather than the defaults.
+
+**Why not switch to cffi**: the truncation was a missing declaration, not a
+ctypes defect. cffi only improves on this in API mode, where a C compiler checks
+the declarations at build time — which would pull a toolchain into Phase 8
+packaging for one module, while every other Windows call in the client already
+goes through ctypes. ABI mode would be a wash.
+
 ---
 
 ## D — Accepted limitations
