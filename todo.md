@@ -358,6 +358,16 @@ To run by hand:
       **Takes over the screen and disables Task Manager**; run it when
       convenient, and check both directions of the Task Manager policy
       ([issues.md](issues.md) C10)
+- [ ] **Does enforcement reach the screen from a service context?** The agent
+      and the watchdog both run as SYSTEM in session 0, which is isolated from
+      the interactive desktop — so the overlay may be invisible while every log
+      line reports success ([issues.md](issues.md) C11). Needs elevation, so it
+      could not be settled from a dev session. **Gating for Phase 6.**
+- [ ] Duplicate overlays from a watchdog pass ([issues.md](issues.md) C12,
+      verified) — observe the count, then fix once C11 is measured
+
+[testing.md](testing.md) is the step-by-step plan for this phase, including the
+two-laptop topology and the WSL networking setup Laptop B needs.
 
 **What this phase cannot tell you.** With packaging last, all of the above
 exercises the *fallback* paths: the running interpreter for script validation

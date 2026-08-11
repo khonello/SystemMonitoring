@@ -769,6 +769,99 @@ bundled runtime and the helper executables. Those are spawned on demand rather
 than resident, so idle footprint may still be close to the estimate — but it
 has never been measured. Measure in Phase 6 rather than restating the number.
 
+### C11. Enforcement may never reach the user's screen under the service install — *unverified, blocks Phase 5* — **CANNOT BE VERIFIED FROM HERE**
+
+Surfaced while checking whether two overlays could collide in production. The
+collision cannot happen with one agent per machine (B24), but chasing where the
+overlay actually *renders* raised a larger question that has never been asked.
+
+Two code facts, both confirmed by reading:
+
+- `install_service.py:115` creates the service with `sc create` and no `obj=`,
+  which defaults to **LocalSystem**.
+- `install_service.py:143` registers the watchdog task with `/RU SYSTEM` and no
+  `/IT`, so it runs non-interactively.
+
+Both therefore run in **session 0**, which has been isolated from the interactive
+desktop since Windows Vista. `subprocess.Popen` places its child in the parent's
+session. If that holds here, then under the packaged install:
+
+- the lockout overlay renders in session 0, where the logged-in student cannot
+  see it, while `enforce_once()` returns cleanly, the watchdog returns 0, Task
+  Scheduler records a clean run and the log says "Block window active; ensuring
+  the overlay is up";
+- `overlay_app.py:87` writes `DisableTaskMgr` to `HKEY_CURRENT_USER`, which
+  under SYSTEM is SYSTEM's hive, not the student's — so the hardening in C10
+  would not reach them either.
+
+That is a fail-open in the component whose entire job is to fail closed, and one
+that reports success at every level.
+
+**Not a regression.** Every run to date has been by hand from an interactive
+prompt, where the overlay inherits your session and works. It is an assumption
+that has never been tested, which is precisely what Phase 5 exists to catch.
+
+**Why this entry is not marked verified**: creating a service and a Scheduled
+Task needs elevation, so this could not be settled from a normal session. The
+reasoning is from documented Windows behaviour, not measurement. **Do not act on
+it until it is measured** — `testing.md` T5.5–T5.7 are the tests, and they are
+gating items for Phase 6.
+
+If confirmed, the fix is not small: getting a window into the active session
+needs `WTSGetActiveConsoleSessionId` plus `CreateProcessAsUser` with a
+duplicated user token, or moving the launch to a task registered to run as the
+logged-on user. Decide after measuring, not before.
+
+### C12. `overlay_running()` is blind across processes — *verified*
+
+`client/lockout.py:234` answers "is an overlay up?" from `_overlay`, a
+module-level `subprocess.Popen` handle. That is **per process**, but two
+processes launch overlays for the same client id by design: the agent, and the
+Scheduled Task watchdog that exists as an independent check for when the agent
+hangs. Both call the same `enforce_once()` -> `start_overlay()`.
+
+A fresh process starts with `_overlay = None`, so `overlay_running()` returns
+False regardless of what is actually on screen, and `start_overlay` launches
+another one.
+
+**Measured**, not inferred. Two processes resolving the same `CLIENT_ID` and
+`STATE_DIR`, running the shipped `enforce_once()` with only the launched argv
+swapped for a sleeper so nothing took the screen:
+
+```
+[agent]    overlay_running() before = False   after = True   launched pid 19796
+[watchdog] overlay_running() before = False   after = True   launched pid 21028
+concurrent overlay processes: 2
+```
+
+The second process reported no overlay running while the first had one live for
+the same client, and started its own.
+
+Two consequences, the second worse than the first:
+
+- **The duplicate cannot be stopped.** A watchdog pass is a one-shot process
+  that exits immediately, orphaning its overlay, and every later pass starts
+  with `_overlay = None` — so `enforce_once`'s release branch
+  (`if overlay_running(): stop_overlay()`) never sees it. The orphan lives until
+  its own `--until`.
+- **For a pause, that outlives the pause.** An overlay started in pause mode
+  carries the pause's *internal* expiry as `--until` (capped at 1 hour). If the
+  admin drops the pause, the agent stops its own overlay and the orphan stays
+  up — with no countdown, no admin able to clear it, and the machine held until
+  a cap that was only ever meant as a safety net against the admin vanishing.
+  A watchdog pass fires every ~5 minutes, so any pause longer than that is
+  exposed.
+
+**Severity depends on C11.** If session-0 overlays are invisible, the symptom is
+invisible orphaned processes rather than fighting windows — still wrong, but a
+different fix. Measure C11 first.
+
+**Fix shape** (not yet written): the launch needs cross-process overlay
+detection, not the agent-level guard B24 added — the watchdog *should* launch an
+overlay when the agent is dead, that is its purpose. A lock file in `STATE_DIR`
+held by the overlay itself, checked before launching, is the same mechanism
+B24 already proved. `testing.md` T5.8 observes the current behaviour.
+
 ---
 
 ## D — Accepted limitations
