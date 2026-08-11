@@ -277,7 +277,18 @@ Use a key if you have one through your institution; do not buy one for this.
 | Memory | 4096 MB startup | Win11 minimum |
 | Virtual processors | 2 | Win11 minimum |
 | Disk | 64 GB dynamic VHDX | Win11 minimum |
-| Network | Default Switch | NAT; internet during provisioning, nothing afterwards |
+| Network | **Default Switch** | NAT; internet during provisioning, nothing afterwards |
+
+The networking step also offers *Not Connected* and a **WSL** switch. Not
+Connected is the state you switch to at step 8, not the one to install with.
+Leave the WSL switch alone despite the Engine living there — it is created and
+reconfigured by WSL rather than by you, and Hyper-V Firewall rules apply to it;
+Default Switch reaches the host just as well and stays put. The adapter can be
+changed any time in *VM Settings → Network Adapter*.
+
+Note the Default Switch's address range **changes when the host reboots**, so
+re-read the host's `vEthernet (Default Switch)` address when you get to §0.2
+rather than recording it once.
 
 **Leave the network connected until provisioning is finished.** Windows 11 24H2
 pushes a Microsoft account and an internet connection through OOBE, and the
