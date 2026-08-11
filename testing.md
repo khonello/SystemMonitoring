@@ -43,10 +43,9 @@ Stated up front so a green run is not over-read.
   no authentication behind it. TLS does not help: encryption without
   authentication only means the attacker's session is private too.
 
-  **Either work offline / on a phone hotspot while the Engine is running, or
-  skip mirrored mode and use the §0.2 port proxy** — that keeps the listener on
-  the Hyper-V virtual network the VM uses, rather than on the LAN. Bind
-  explicitly with `--host` if you want to be certain what is listening where.
+  **Run offline.** Nothing here needs a network (§0.1c), so this exposure is
+  avoidable entirely rather than merely managed. Bind explicitly with `--host`
+  if you want to be certain what is listening where.
 - **Running by hand is not running as a service.** Everything below runs in your
   own login session. A service runs in session 0, which may behave differently
   for anything that draws on screen — that is exactly what T5.4 exists to check.
@@ -219,6 +218,35 @@ Two things to be aware of, neither a blocker:
   locking is emulated. Run `python -m scripts.bench_database` once and note the
   number; if it is unpleasant, copy the repo into the WSL filesystem
   (`~/SystemMonitoring`) for the Engine only.
+
+### 0.1c Do you need a network? No — and offline is better
+
+**Nothing in this plan needs internet, Wi-Fi or a hotspot once the machines
+exist.** Every link is internal to the laptop:
+
+| Link | Carried by | Needs internet? |
+|---|---|---|
+| Admin → Engine | WSL2 loopback forwarding | no |
+| VM → Engine | Hyper-V Default Switch (host-side NAT + DHCP) | no |
+| VM clock | Hyper-V Integration Services, synced from the host | no |
+
+The Default Switch runs its own DHCP and NAT on the host, so the VM gets an
+address and can reach the host with the laptop in airplane mode. Disconnecting
+the *virtual* adapter in the VM's settings is also how you test T5.3's reconnect
+backoff — no real network to unplug.
+
+**Run it offline by preference, not just when convenient.** Authentication is a
+stub, so the only thing standing between the Engine and anyone on the same
+network is the network itself. Offline turns `issues.md` C1 from a live exposure
+into a theoretical one for the whole of Phase 5. Use the hotspot only for
+one-time provisioning — the Windows ISO, Python, `pip install` inside the VM —
+then take it off the network and leave it there.
+
+One consequence: **do not use `networkingMode=mirrored` in this setup.** Mirrored
+mode hands WSL the host's real interfaces, which is both the exposure above and
+fragile with no interfaces to share. Use the port proxy in §0.2 instead — it
+forwards from the host's own addresses, including the Default Switch one the VM
+talks to, and works with the laptop entirely offline.
 
 ### 0.2 Reaching WSL from the VM (or from a second laptop)
 

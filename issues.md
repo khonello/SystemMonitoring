@@ -23,8 +23,15 @@ assuming X was overlooked.
 Phases 0–4 are complete. Packaging moved to Phase 8 (see C2), and Phase 5 is
 manual per-system verification.
 
-**Currently blocking: nothing.** Everything left in section A is policy you can
-settle at any point before deployment.
+**Currently blocking: C11.** Enforcement may never reach the user's screen under
+the service install, and it cannot be measured without elevation — so it gates
+Phase 6, not Phase 5. Everything left in section A is policy you can settle at
+any point before deployment.
+
+**Numbering.** The letter is the section, so an item's letter changes when its
+status does — C13 became B21 when it was fixed. The number is allocation order,
+not priority, and is never reused, so a reference in an old commit still resolves.
+Test IDs in [testing.md](testing.md) are a separate scheme: `T<part>.<n>`.
 
 ---
 

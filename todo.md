@@ -366,7 +366,8 @@ To run by hand:
 - [ ] Duplicate overlays from a watchdog pass ([issues.md](issues.md) C12,
       verified) — observe the count, then fix once C11 is measured
 
-[testing.md](testing.md) is the step-by-step plan for this phase, including the
+[testing.md](testing.md) is the step-by-step plan for this phase, and
+[remember.md](remember.md) the one-page list of what not to forget. It includes the
 two-laptop topology and the WSL networking setup Laptop B needs.
 
 **What this phase cannot tell you.** With packaging last, all of the above

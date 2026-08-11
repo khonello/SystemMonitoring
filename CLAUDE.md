@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
+**`remember.md` is the one-page list of things that are easy to forget and expensive to get wrong** — safety rules, the silent-failure modes, and what the doc and issue naming means. Read it first after any gap in the work.
+
 Two root-level docs track the work: **`todo.md`** is the phase-by-phase plan, and **`issues.md`** logs known bugs, deferred decisions and unverified claims. Read both before starting a phase — `issues.md` marks which items block which phase. **`commands.md`** is the operational CLI reference — every program, its flags, and why the entry points are split the way they are; keep it current when a flag changes, since unlike the README it is meant to track the code. **`testing.md`** is the Phase 5 manual test plan: the two-laptop topology, what to run on each unit, and what the result should look like.
 
 **Two open findings gate Phase 5/6, both about enforcement reaching the screen.** `issues.md` C11 (unverified, needs elevation to test): the agent's service and the watchdog task both run as SYSTEM in session 0, which is isolated from the interactive desktop — the overlay may render where the student cannot see it while every log line reports success. C12 (verified by measurement): `overlay_running()` reads a per-process `Popen` handle, so the watchdog cannot see an overlay the agent started and launches a duplicate it can then never stop. Measure C11 before fixing C12 — the right fix for C12 depends on the answer.
