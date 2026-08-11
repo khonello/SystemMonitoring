@@ -176,8 +176,9 @@ not a risk worth taking to save two hours.
 - **Windows: free for this purpose.** Microsoft's Evaluation Center offers a
   time-limited Windows 11 Enterprise evaluation (90 days at the time of
   writing — check the current terms), which comfortably outlasts a project.
-- **Disk: ~40–64 GB**, thin-provisioned so it only grows as used. Python plus
-  PySide6 adds ~200 MB.
+- **Disk: 64 GB**, thin-provisioned so it only grows as used. That is Windows
+  11's own minimum, not a comfort figure — Setup refuses less. Python plus
+  PySide6 adds ~400 MB.
 - **RAM: 4 GB** assigned while it runs. Comfortable if the host has 12 GB+.
 - **CPU: 2 vCPU.**
 - **Setup: ~2 hours**, most of it the ISO download and Windows install running
@@ -247,6 +248,59 @@ mode hands WSL the host's real interfaces, which is both the exposure above and
 fragile with no interfaces to share. Use the port proxy in §0.2 instead — it
 forwards from the host's own addresses, including the Default Switch one the VM
 talks to, and works with the laptop entirely offline.
+
+### 0.1d Building the VM
+
+A retail **Win11 24H2 x64** ISO (~5.7 GB, multi-edition) is the right media.
+Choose **Pro** at the edition prompt: Home would run the agent fine, but Pro
+matches a managed lab machine and carries `gpedit.msc`, which is what T4.5 needs
+to reproduce the group-policy conflict C10 describes.
+
+**Activation is not needed for any of this.** Left unactivated, Windows 11 runs
+indefinitely with cosmetic limits — a desktop watermark and locked
+personalization settings. Services, Scheduled Tasks, session behaviour and
+registry policy all work normally, and those are the entire subject of Phase 5.
+Use a key if you have one through your institution; do not buy one for this.
+
+**Hyper-V settings that Setup will refuse without:**
+
+| Setting | Value | Why |
+|---|---|---|
+| Generation | **2** | Windows 11 requires UEFI |
+| Security → Trusted Platform Module | **enabled** | Win11 requires TPM 2.0; a Gen 2 VM has a virtual one but it is **off by default**, and Setup stops with "This PC can't run Windows 11" |
+| Secure Boot | on, template *Microsoft Windows* | Win11 requirement |
+| Memory | 4096 MB startup | Win11 minimum |
+| Virtual processors | 2 | Win11 minimum |
+| Disk | 64 GB dynamic VHDX | Win11 minimum |
+| Network | Default Switch | NAT; internet during provisioning, nothing afterwards |
+
+**Leave the network connected until provisioning is finished.** Windows 11 24H2
+pushes a Microsoft account and an internet connection through OOBE, and the
+offline workarounds are a moving target — `oobe\BypassNRO.cmd` was removed in
+recent builds, leaving `Shift+F10` → `start ms-cxh:localonly` as the current
+local-account route. Fighting that buys nothing here. Install with the network
+up, then take it down for good once the machine is provisioned.
+
+**Provisioning, in order:**
+
+1. Install Windows, complete OOBE.
+2. Install **Python 3.10+** (the project pins `requires-python = ">=3.10"`).
+   Tick *Add python.exe to PATH*.
+3. Copy the repository in — Enhanced Session drive redirection is easiest.
+4. `pip install -r requirements.txt -r requirements-client.txt`
+   (the VM runs only the Client, so the Admin file is not needed).
+5. `pip install -e .` — without it `from common.protocol import ...` will not
+   resolve.
+6. Copy `certs/` in at the same relative path.
+7. `python -m client --check` — should resolve an id, report three MISSING
+   bundles, and say `agent running False`.
+8. **Disconnect the virtual network adapter.** Everything from here is offline
+   (§0.1c).
+9. **Checkpoint: "baseline"**, before anything is installed as a service.
+
+Take a second checkpoint named **"pre-service"** immediately before T5.4's
+`install_service`, and revert to it after each attempt. That is the whole reason
+the VM is worth its two hours.
 
 ### 0.2 Reaching WSL from the VM (or from a second laptop)
 
