@@ -9,14 +9,14 @@ and what it does; this file says what to *run* and what you should *see*.
 
 Work top to bottom. Record results in the table at the end.
 
-| Part | What it covers | Machines | Safe on your own laptop? |
+| Part | What it covers | Machines | Runs unattended on your own laptop? |
 |---|---|---|---|
 | **0** | Setup: roles, networking, install, TLS | — | yes |
 | **1** | **Engine alone** — config resolves, database is writable, it serves, TLS is genuinely enforced | one | yes |
 | **2** | **Client alone** — collection works on this hardware, state paths resolve, one agent per id | one | yes |
 | **3** | **Admin alone** — QML loads clean, config resolves, the window survives a failed connect | one | yes |
-| **4** | Helper windows — dialog exit codes, overlay, Task Manager | VM | **no** — takes the screen |
-| **5** | The link — registration, telemetry, reconnect, and enforcement from a service | host + VM | **no** — installs a service |
+| **4** | Helper windows — dialog exit codes, overlay, Task Manager | VM | takes over the screen for the length of the test |
+| **5** | The link — registration, telemetry, reconnect, and enforcement from a service | host + VM | installs a boot-start service (removable) |
 
 **Parts 1–3 are the heart of this phase**: each unit proven on its own, with
 nothing else running, so any failure names one component instead of "the
@@ -58,21 +58,20 @@ Stated up front so a green run is not over-read.
 
 One physical laptop, three environments. The Engine is Linux-only by design, so
 WSL covers it without a second machine; the Client goes in a Hyper-V VM because
-it is the only unit whose tests are destructive.
+its tests are the ones you will want to repeat.
 
 | | Runs on | Why there |
 |---|---|---|
 | **Engine** | WSL, on the laptop | Linux-only by design (asyncio/epoll). Standard library only, so WSL needs no venv. |
-| **Administrator** | Windows, on the laptop | Needs Qt and a real display; nothing it does can damage the host. |
-| **Client Agent** | Windows VM | The only unit that installs a boot-start service and blacks out a screen. Snapshots make that repeatable instead of one-shot. |
+| **Administrator** | Windows, on the laptop | Needs Qt and a real display, and never needs reverting. |
+| **Client Agent** | Windows VM | Its tests take over a screen and install a service, so snapshots let you repeat them freely rather than once per sitting. |
 
 **This is the right assignment and the order does not need changing.** Each unit
-is where its constraints put it, and the destructive one is the one that can be
-rolled back. Two sanity checks on it:
+is where its constraints put it, and the one you will rerun most is the one that
+can be rolled back. Two sanity checks on it:
 
-- Putting the Admin in the VM and the Client on the host would be exactly
-  backwards — it would move the only dangerous component onto your working
-  machine.
+- Putting the Admin in the VM and the Client on the host would be backwards —
+  the Admin is the one that never needs reverting.
 - Running the Engine in its own Linux VM instead of WSL would work but buys
   nothing: it is the same Linux, and WSL is the documented setup.
 
@@ -106,8 +105,8 @@ Not blockers, but do not read a failure here as a code fault.
   drive as removable only when `GetDriveTypeW` returns `DRIVE_REMOVABLE`. Hyper-V
   has no plain USB pass-through: an Enhanced Session redirected drive presents as
   remote, and an attached VHD or pass-through disk presents as fixed. Neither
-  trips the check. **Run T2.1 and T2.2 on the host instead** — Part 2 is
-  non-destructive, so that costs nothing.
+  trips the check. **Run T2.1 and T2.2 on the host instead** — they touch
+  nothing, so that costs nothing.
 - **Clock skew after a snapshot restore.** Lockout schedules are time-based and
   HMAC-protected, so a VM resumed with a stale clock can make a block window look
   expired or not yet started. Run `w32tm /resync` after every revert, before
@@ -127,13 +126,13 @@ skipped entirely.
 What a single machine **cannot** test:
 
 - **Anything the student would see.** The overlay would cover *your* screen and
-  disable *your* Task Manager while you are working. T4.2–T4.6 and T5.5–T5.8 all
-  need a machine you are willing to lose for a few minutes.
+  disable *your* Task Manager for the length of the block. T4.2–T4.6 and
+  T5.5–T5.8 all want a machine you can hand over for a few minutes.
 - **The link itself.** A real network hop, the WSL NAT crossing, TLS against a
   non-loopback address, and the reconnect/backoff behaviour of T5.3 are all
   loopback no-ops on one box.
-- **Session 0 (C11).** Installing the service on your dev machine to test this
-  means a service that starts on every boot and can black out your screen.
+- **Session 0 (C11).** Testing it means installing a boot-start service on your
+  dev machine. Removable with `--uninstall`, but not something to leave behind.
 
 So: use the host alone for Parts 1–3 and T5.1–T5.3, and bring in the VM for
 Part 4 and T5.4 onward. Running the client under `--id` on the same box as the
@@ -143,53 +142,49 @@ socket, protocol and database either way.
 ### 0.1b What the second machine should be, and what it costs
 
 The staged plan — one machine now, a second one later — is the right order:
-everything cheap and safe comes first, and the second machine is only needed for
-the tests that are neither.
+everything that needs no second machine comes first.
 
-Three ways to provide it.
-
-| | Cost in money | Cost in time | Cost in risk |
+| | Money | Time | What it gets you |
 |---|---|---|---|
-| **Your own laptop, no second machine** | none | none | **high** — see below |
-| **Windows VM on your laptop** | none | ~2h once | **very low** — snapshots |
-| **Second physical laptop** | one laptop | ~1h once | low |
+| **Your own laptop, nothing else** | none | none | works; ties up your desktop, one careful run at a time |
+| **Windows VM on your laptop** | none | ~2h once | revert in seconds, repeat freely, desktop stays yours |
+| **Second physical laptop** | a laptop | ~1h once | real network and a real second screen |
 
-**Why "just use your own machine" is the expensive option.** The tests that
-still need a second machine are exactly the destructive ones. `install_service`
-registers a service that **starts on every boot** plus a Scheduled Task that
-runs every 5 minutes as SYSTEM, and the thing they enforce blacks out the screen
-and disables Task Manager. The design bounds the damage — blocks are capped at
-2 hours, the overlay always restores the Task Manager policy on exit, and
-`install_service.py --uninstall` removes both — but the whole point of C11 is
-that this path has **never been run**, and it is being tested precisely because
-it might not behave as designed. A fail-closed component failing in an
-unexpected direction on your only working machine, days before a deadline, is
-not a risk worth taking to save two hours.
+**What is actually at stake on your own machine.** The overlay covers the
+primary display and disables Task Manager while a block window is open. Blocks
+are capped at 2 hours, the overlay closes itself at its end time, and the Task
+Manager policy is always restored on exit — including on a crash.
+`install_service.py --uninstall` removes the service and the Scheduled Task.
+So the realistic worst case is a screen you cannot use for up to two hours, not
+a machine you have to repair.
+
+That is survivable, which is why testing on one machine is a legitimate choice.
+It is just tedious: every attempt costs you your desktop for the length of the
+block, so you end up running each test once, carefully, rather than as many
+times as it takes to understand what you are seeing. C11 in particular is worth
+poking at repeatedly.
 
 **The VM is the best value, and you already have what it needs.**
 
 - **Hypervisor: free.** You are on Windows 11 **Pro**, so Hyper-V is included —
-  enable it under *Windows Features*. Prefer it over VirtualBox/VMware here for
-  a specific reason: WSL2 already requires the Hyper-V platform, so a third-party
-  hypervisor on the same host runs in a slower compatibility mode. Using Hyper-V
-  avoids paying that twice.
-- **Windows: free for this purpose.** Microsoft's Evaluation Center offers a
-  time-limited Windows 11 Enterprise evaluation (90 days at the time of
-  writing — check the current terms), which comfortably outlasts a project.
+  enable it under *Windows Features*. Prefer it over VMware/VirtualBox here for
+  a specific reason: WSL2 already requires the Hyper-V platform, so a
+  third-party hypervisor on the same host runs through a compatibility layer
+  and gives up some speed. Hyper-V avoids paying that twice.
+- **Windows: free for this purpose.** A retail Windows 11 ISO installs and runs
+  unactivated indefinitely — see §0.1d.
 - **Disk: 64 GB**, thin-provisioned so it only grows as used. That is Windows
   11's own minimum, not a comfort figure — Setup refuses less. Python plus
   PySide6 adds ~400 MB.
 - **RAM: 4 GB** assigned while it runs. Comfortable if the host has 12 GB+.
 - **CPU: 2 vCPU.**
-- **Setup: ~2 hours**, most of it the ISO download and Windows install running
-  unattended.
+- **Setup: ~2 hours**, most of it the Windows install running unattended.
 
-**The feature that actually matters is snapshots.** Take a checkpoint before
-`install_service`, run the destructive tests, and revert in seconds — including
-if the machine ends up genuinely locked. That turns C11 and T5.5–T5.8 from
-"careful, one-shot" into something you can repeat as many times as it takes,
-which is the difference between measuring a fail-open properly and guessing at
-it.
+**Snapshots are the actual reason.** Take a checkpoint before
+`install_service`, run the tests, revert in seconds. That turns C11 and
+T5.5–T5.8 from one careful attempt into something you can repeat until you
+understand it, which is the difference between measuring the session-0 question
+and guessing at it.
 
 **Networking.** Give the VM an **External** virtual switch so it gets a real LAN
 address, and set `networkingMode=mirrored` in `.wslconfig` on the host so the
@@ -199,9 +194,8 @@ VM exactly as written for Laptop B — including `Test-NetConnection` as the gat
 **When the physical laptop is still worth it.** A VM cannot tell you about real
 Wi-Fi behaviour, roaming, a dock changing the adapter, or a genuinely separate
 physical display. If you have a second laptop, use it for T5.1–T5.3 network
-realism and the VM for the destructive T5.4 onward. If you have to pick one,
-pick the VM — the destructive tests are the ones that cannot be done safely any
-other way.
+realism and the VM for T5.4 onward. If you have to pick one, pick the VM: it is
+free, and it is the one that lets you repeat things.
 
 **Engine and Admin on one laptop is fine and is the intended dev setup.** They
 are different processes, in different operating systems, talking over a socket;
@@ -578,8 +572,8 @@ first three.
 
 ### T4.2 — Overlay
 
-⚠️ Covers the whole screen and disables Task Manager. Pick an end time a couple
-of minutes out.
+This covers the whole screen and disables Task Manager until its end time, so
+pick one a couple of minutes out.
 
 ```powershell
 python -m client.overlay_app --until 2026-08-11T14:05:00Z
@@ -654,7 +648,7 @@ local and must not depend on the Engine.
 
 ### T5.4 — Does enforcement work from a service context? *(new, unverified)*
 
-**The one to take seriously.** Everything above runs in your login session. In
+**The one genuinely unknown result in this phase.** Everything above runs in your login session. In
 production the agent runs as a Windows service and the lockout watchdog runs as
 a Scheduled Task — both as SYSTEM, in session 0, which is isolated from the
 interactive desktop. If a GUI launched from there cannot reach your screen, the
@@ -674,8 +668,8 @@ Then set a block from the Admin and watch the VM's screen.
 - [ ] **T5.7** `DisableTaskMgr` written to the **logged-in user's** hive, not
       SYSTEM's: Y/N
 
-If T5.5 or T5.6 is No, that is a fail-open in enforcement and Phase 6 should not
-start until it is fixed. See `issues.md` C11.
+If T5.5 or T5.6 is No, enforcement does not reach the screen under the real
+install, and that is worth fixing before Phase 6. See `issues.md` C11.
 
 ### T5.8 — Duplicate overlays from the watchdog *(new, `issues.md` C12)*
 

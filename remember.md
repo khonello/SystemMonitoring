@@ -1,8 +1,7 @@
 # Things to remember
 
-One page. Everything here is either a way to lose an afternoon or a way to
-damage a machine. Details live in the linked docs; this is the list you reread
-after a week away.
+One page of the things that are easy to forget and annoying to rediscover.
+Details live in the linked docs; this is the list you reread after a week away.
 
 ## Before you run anything
 
@@ -15,7 +14,7 @@ ignore every flag — config is read into `Final` constants at import time, so
 did" without touching the network: `engine --check`, `client --check`,
 `admin --check-qml`. Most integration bugs are configuration bugs.
 
-## Safety
+## Worth getting right
 
 **Never run the Engine on a network you do not control.** Authentication is a
 stub that accepts anyone (`issues.md` C1). Anyone who reaches port 5000 can
@@ -23,15 +22,16 @@ register as an **admin** and issue commands. TLS does not help — encryption
 without authentication only means the attacker's session is private too. Phase 5
 needs no network at all, so run it offline. → [testing.md](testing.md) §0.1c
 
-**Never launch the overlay on a machine you are using.** It covers the screen,
-disables Task Manager and re-asserts topmost every 500ms. It always restores the
-policy on exit and closes at its `--until` time, but "always" is exactly what
-`issues.md` C11 questions.
+**Give the overlay a machine you are not using.** It covers the screen, disables
+Task Manager and re-asserts topmost every 500ms until its `--until` time. It
+closes itself and restores the policy on exit, and blocks are capped at 2 hours —
+so the cost of getting this wrong is a screen you cannot use for a while, not a
+machine to repair.
 
 **Snapshot the VM before `install_service`.** It registers a boot-start service
-*and* a Scheduled Task that runs every 5 minutes as SYSTEM, and what they enforce
-blacks out a screen. `--uninstall` removes both, but a snapshot is the only
-undo that works when the machine is locked.
+and a Scheduled Task running every 5 minutes as SYSTEM. `--uninstall` removes
+both, but reverting a snapshot is faster and lets you rerun the test as many
+times as you like.
 
 **`w32tm /resync` after every snapshot revert.** Lockout schedules are time-based
 and HMAC-protected. A stale VM clock makes block windows look expired or not yet
