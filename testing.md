@@ -7,9 +7,21 @@ rather than at "the system".
 Commands are given in short form. `commands.md` is the reference for every flag
 and what it does; this file says what to *run* and what you should *see*.
 
-Work top to bottom. Part 0 is setup, Parts 1–3 are the three units in isolation,
-Part 4 is the helper windows, Part 5 is the two-machine link. Record results in
-the table at the end.
+Work top to bottom. Record results in the table at the end.
+
+| Part | What it covers | Machines | Safe on your own laptop? |
+|---|---|---|---|
+| **0** | Setup: roles, networking, install, TLS | — | yes |
+| **1** | **Engine alone** — config resolves, database is writable, it serves, TLS is genuinely enforced | one | yes |
+| **2** | **Client alone** — collection works on this hardware, state paths resolve, one agent per id | one | yes |
+| **3** | **Admin alone** — QML loads clean, config resolves, the window survives a failed connect | one | yes |
+| **4** | Helper windows — dialog exit codes, overlay, Task Manager | one | **no** — takes the screen |
+| **5** | The link — registration, telemetry, reconnect, and enforcement from a service | two | **no** — installs a service |
+
+**Parts 1–3 are the heart of this phase**: each unit proven on its own, with
+nothing else running, so any failure names one component instead of "the
+system". All three have a diagnostic that needs no network at all, which is why
+they come first and why they are safe to run anywhere.
 
 ---
 
@@ -68,6 +80,68 @@ So: use one machine for Parts 1–3 and T5.1–T5.3, and bring in Laptop B for
 Part 4 and T5.4 onward. Running the client under `--id` on the same box as the
 Engine and Admin is not a compromise for any of the former — it is the same
 socket, protocol and database either way.
+
+### 0.1b What the second machine should be, and what it costs
+
+The staged plan — one machine now, a second one later — is the right order:
+everything cheap and safe comes first, and the second machine is only needed for
+the tests that are neither.
+
+Three ways to provide it.
+
+| | Cost in money | Cost in time | Cost in risk |
+|---|---|---|---|
+| **Your own laptop, no second machine** | none | none | **high** — see below |
+| **Windows VM on your laptop** | none | ~2h once | **very low** — snapshots |
+| **Second physical laptop** | one laptop | ~1h once | low |
+
+**Why "just use your own machine" is the expensive option.** The tests that
+still need a second machine are exactly the destructive ones. `install_service`
+registers a service that **starts on every boot** plus a Scheduled Task that
+runs every 5 minutes as SYSTEM, and the thing they enforce blacks out the screen
+and disables Task Manager. The design bounds the damage — blocks are capped at
+2 hours, the overlay always restores the Task Manager policy on exit, and
+`install_service.py --uninstall` removes both — but the whole point of C11 is
+that this path has **never been run**, and it is being tested precisely because
+it might not behave as designed. A fail-closed component failing in an
+unexpected direction on your only working machine, days before a deadline, is
+not a risk worth taking to save two hours.
+
+**The VM is the best value, and you already have what it needs.**
+
+- **Hypervisor: free.** You are on Windows 11 **Pro**, so Hyper-V is included —
+  enable it under *Windows Features*. Prefer it over VirtualBox/VMware here for
+  a specific reason: WSL2 already requires the Hyper-V platform, so a third-party
+  hypervisor on the same host runs in a slower compatibility mode. Using Hyper-V
+  avoids paying that twice.
+- **Windows: free for this purpose.** Microsoft's Evaluation Center offers a
+  time-limited Windows 11 Enterprise evaluation (90 days at the time of
+  writing — check the current terms), which comfortably outlasts a project.
+- **Disk: ~40–64 GB**, thin-provisioned so it only grows as used. Python plus
+  PySide6 adds ~200 MB.
+- **RAM: 4 GB** assigned while it runs. Comfortable if the host has 12 GB+.
+- **CPU: 2 vCPU.**
+- **Setup: ~2 hours**, most of it the ISO download and Windows install running
+  unattended.
+
+**The feature that actually matters is snapshots.** Take a checkpoint before
+`install_service`, run the destructive tests, and revert in seconds — including
+if the machine ends up genuinely locked. That turns C11 and T5.5–T5.8 from
+"careful, one-shot" into something you can repeat as many times as it takes,
+which is the difference between measuring a fail-open properly and guessing at
+it.
+
+**Networking.** Give the VM an **External** virtual switch so it gets a real LAN
+address, and set `networkingMode=mirrored` in `.wslconfig` on the host so the
+Engine inside WSL is reachable at the host's address. §0.2 then applies to the
+VM exactly as written for Laptop B — including `Test-NetConnection` as the gate.
+
+**When the physical laptop is still worth it.** A VM cannot tell you about real
+Wi-Fi behaviour, roaming, a dock changing the adapter, or a genuinely separate
+physical display. If you have a second laptop, use it for T5.1–T5.3 network
+realism and the VM for the destructive T5.4 onward. If you have to pick one,
+pick the VM — the destructive tests are the ones that cannot be done safely any
+other way.
 
 **Engine and Admin on one laptop is fine and is the intended dev setup.** They
 are different processes, in different operating systems, talking over a socket;
@@ -287,7 +361,11 @@ again — it should acquire normally. That is the crash-restart case.
 
 ### T2.5 — Lockout survives a reboot
 
-Set a block through the Admin later (Part 5), then reboot Laptop B while the
+**Deferred — this is the one Part 2 test that is not standalone or safe.** It
+needs a block set through the Admin (Part 5) and a reboot of the machine being
+blocked, so run it on the second machine when you reach Part 5, not now.
+
+Set a block through the Admin, then reboot the client machine while the
 block is still open. The agent must re-read the schedule on boot and put the
 overlay back **before** anything else. This is the single most important
 behaviour in the client.
