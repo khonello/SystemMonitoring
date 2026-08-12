@@ -14,6 +14,7 @@ are right.
 - [Client Agent](#client-agent--python--m-client)
 - [Administrator](#administrator--python--m-admin)
 - [Shared scripts](#shared-scripts)
+- [Lab provisioning — `build_client_image.ps1`](#lab-provisioning--build_client_imageps1)
 - [labmonitor.py](#labmonitorpy--dev-box-dispatcher)
 - [Diagnostics index](#diagnostics-index)
 
@@ -236,6 +237,53 @@ the lab machine.
 |---|---|---|
 | `python -m scripts.generate_cert` | `--dir PATH` (default `certs/`), `--days N`, `--identity NAME` (default `TLS_IDENTITY`), `--force` | Generate the Engine's self-signed certificate. `--identity` is the fixed name clients pass as `server_hostname`, which is what keeps hostname verification on even when the Engine's address changes. `--force` replaces an existing certificate. |
 | `python -m scripts.bench_database` | none | Measure SQLite write cost. Re-run before changing the synchronous-write decision. |
+
+---
+
+## Lab provisioning — `build_client_image.ps1`
+
+The odd one out in this file: PowerShell, run on the **host**, and it builds no
+part of the system. It produces the trimmed Windows 11 install media the Phase 5
+client VM is installed from. Rationale and the keep/remove decisions live in
+`testing.md` section 0.1e; this is the flag reference.
+
+```powershell
+# Elevated Windows PowerShell 5.1, from the repo root
+Set-ExecutionPolicy Bypass -Scope Process
+.\scripts\build_client_image.ps1 -SourceIso <path> [-Scratch <dir>] [-OutputIso <path>] [-DryRun]
+```
+
+| Parameter | Type | Default | What it is |
+|---|---|---|---|
+| `-SourceIso` | path, **required** | — | **Input.** The untouched retail ISO. Mounted read-only; never written to |
+| `-Scratch` | directory | `%SystemDrive%\labimage` | **Workbench.** Created, filled, and **deleted at the start of every run** — keep nothing of your own here. ~3 GB for a dry run, ~25 GB for a build |
+| `-OutputIso` | path | `.\win11-labclient.iso` | **Result.** The trimmed ISO to install the VM from. Unused by `-DryRun` |
+| `-DryRun` | switch | off | Mount, classify, print, discard. Writes nothing and needs no ADK. **Run this first** |
+| `-Edition` | string | `Windows 11 Pro` | Which edition to keep from multi-edition media. Pro is the default because T4.5 needs `gpedit.msc` (`issues.md` C10) |
+| `-AdminUser` | string | `lab` | Local account created by the injected `autounattend.xml`, which is also what skips 24H2's Microsoft-account requirement |
+| `-AdminPassword` | string | `lab` | Password for the above. Weak on purpose and acceptable only because the VM is on an isolated switch — `testing.md` 0.1c |
+| `-OscdimgPath` | path | probe | Full path to `oscdimg.exe`, for an ADK installed outside its default location. Without it the script probes the ADK default and `PATH` |
+| `-KeepWinget` | switch | off | Keep App Installer. Off because Python is installed from its own `.exe` |
+| `-RemoveFeaturePayload` | switch | off | Also delete disabled features' payload from the component store. Saves ~1 GB, costs some serviceability |
+| `-SkipCompress` | switch | off | Skip the final `/Export-Image` recompress. Faster, larger ISO — for iterating on the keep-list |
+
+**Output labels.** One line per provisioned package, then per capability:
+
+| Label | Meaning |
+|---|---|
+| `KEEP` | on `$KeepAppx` — Notepad, Snipping Tool, Terminal, plus the frameworks they load against |
+| `PROTECTED` | on `$ProtectedAppx` — the shell itself. Start menu, File Explorer, OOBE, credential and print dialogs |
+| `REMOVE` | everything else. The model is a keep-list, so this is the default outcome |
+
+**Prerequisite: `oscdimg.exe` from the Windows ADK**, for the build only. The
+script resolves it from the ADK's default location or `PATH` and **will not
+download it** — see `testing.md` section 0.1e.
+
+**Two behaviours worth knowing.** The script tolerates an ISO left attached by a
+previous failed run and reuses it, rather than making every retry start with a
+manual `Dismount-DiskImage`. And on any failure inside the mounted image it
+unmounts with `/Discard`, so a bad run never leaves a half-modified image
+mounted under `-Scratch`.
 
 ---
 
