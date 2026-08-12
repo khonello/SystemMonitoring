@@ -40,12 +40,10 @@ Stated up front so a green run is not over-read.
   TLS does not help: encryption without authentication only means the
   attacker's session is private too.
 
-  **The chosen setup answers this structurally.** An Internal switch has no
-  route to any real network, so the Engine is unreachable from Wi-Fi by
-  construction rather than by anyone remembering a rule (section 0.1). Under
-  topology A it is a rule instead — bind the port proxy to the Default Switch
-  address, never `0.0.0.0` (section 0.2) — which is one of the reasons topology
-  A is the fallback rather than the plan.
+  **The setup answers this structurally.** An Internal switch has no route to
+  any real network, so the Engine is unreachable from Wi-Fi by construction
+  rather than by anyone remembering a rule (section 0.1). That costs nothing to
+  arrange — it is simply where the machines already are.
 - **Running by hand is not running as a service.** Everything below runs in your
   own login session. A service runs in session 0, which may behave differently
   for anything that draws on screen — that is exactly what T5.4 exists to check.
@@ -54,21 +52,25 @@ Stated up front so a green run is not over-read.
 
 ## Part 0 — Setup
 
-### 0.0 The setup, and the fallback
+### 0.0 The setup
 
-**The plan is two VMs on an isolated switch** (section 0.1): the Engine in its
-own Linux VM, the Client Agent in a Windows VM, both on a Hyper-V **Internal**
-switch, and the Administrator on the host. Chosen because it is simpler to run,
-not merely tidier — it has no port proxy, no NAT addresses that move when the
-host reboots, and no way for the Engine to be reachable from a real network.
+**Two VMs on an isolated switch**: the Engine in its own Linux VM, the Client
+Agent in a Windows VM, both on a Hyper-V **Internal** switch, and the
+Administrator on the host. Chosen because it is simpler to run, not merely
+tidier — no port proxy, no NAT addresses that move when the host reboots, and no
+way for the Engine to be reachable from a real network.
 
-**Topology A** (section 0.1f) keeps the Engine in WSL and bridges into it with a
-port proxy. It exists because it needs one less VM's worth of disk, which is the
-binding constraint on a machine that does not have ~70 GB spare. Use it if that
-is where you are; the results carry over unchanged.
+**There is one path through this document.** An earlier draft carried a second
+topology that kept the Engine in WSL and bridged into it with a port proxy, as a
+fallback for a machine short on disk. It was removed rather than kept, for two
+reasons: two paths through a setup document is itself a source of mistakes, and
+the port proxy is the one piece of that arrangement that can silently stop
+working between sittings, because WSL2's address changes across host reboots.
+The reasoning is in git history if it is ever wanted again.
 
-Everything from Part 1 onward is identical under either. Only how the Client
-reaches the Engine differs.
+**If you only want the steps, go to section 0.5** — Part 0 as a flat checklist,
+with what is already done marked off. Everything between here and there is the
+reasoning behind those steps.
 
 ### 0.1 The setup — two VMs on an isolated switch
 
@@ -97,7 +99,7 @@ What this removes, which is the whole argument for it:
 - **No port proxy.** Client and Engine share a subnet; the client connects
   straight to `192.168.100.2:5000`.
 - **No moving addresses.** Static IPs on a switch with no DHCP, so nothing to
-  re-read after a reboot — unlike both NAT ranges in topology A.
+  re-read after a reboot.
 - **The C1 exposure becomes structural.** An Internal switch has no route to any
   real network, so an Engine that authenticates nobody is unreachable from Wi-Fi
   *by construction* rather than by remembering to bind the right address. That
@@ -113,97 +115,92 @@ where WSL2 is a development convenience nobody deploys to.
 | | RAM |
 |---|---|
 | Host Windows + editor, browser, tooling | ~8 GB |
-| Client VM (Windows 11) | 4 GB |
+| Client VM (Windows 11, **tiny11** — section 0.1e) | 4 GB assigned, ~1.5 GB in use |
 | Engine VM (Linux, **server install, no desktop**) | 1–2 GB |
 | Admin, on the host | ~0.4 GB |
-| | **~14 GB** |
+| | **~14 GB assigned, ~11 GB in use** |
 
 That fits. Making the Admin a *third* VM does not — a Windows VM running Qt
 wants another 4 GB and leaves the host nothing. Two VMs with the Admin on the
 host is also the right split on its own terms: the Admin is the one component
 that never needs reverting.
 
-Two things that turn "fits" into "comfortable":
+**On 8 GB it still fits**, and the row that decides it is the Engine VM, not the
+Windows one. The Engine imports only the standard library, so a 512 MB
+Debian-minimal guest runs it exactly as well as a 2 GB Ubuntu Server does:
 
-- **Install the Engine VM as a server, no desktop.** Ubuntu Server or a Debian
-  netinst: ~1 GB RAM, ~5 GB disk. The Engine is headless and standard-library
-  only, so a desktop would be pure overhead. `apt install python3` is the whole
-  dependency list.
-- **Dynamic Memory on the Windows client VM** (startup 4 GB, min 1 GB, max
-  4 GB), so Hyper-V reclaims what it is not using. Install with a static 4 GB
-  and switch afterwards — Windows Setup is happier that way.
+| | RAM |
+|---|---|
+| Host Windows + Admin, editor and browser closed | ~3.5 GB |
+| Client VM (Dynamic 1–3 GB, startup 2 — see below) | ~1.5–1.8 GB in use |
+| Engine VM (Debian netinst, static) | 512 MB assigned, ~0.3 GB in use |
+| | **~6 GB of 8** |
+
+Two conditions turn that arithmetic into something that holds on the day:
+
+- **Close the editor and browser before presenting.** That is 2–3 GB, and it is
+  the entire margin.
+- **`wsl --shutdown` first.** A WSL instance left running costs 0.5–1 GB doing
+  nothing, and nothing in this setup uses it — the Engine has its own VM.
+
+**What 8 GB does not fit is a second Windows client VM** — so run one agent per
+VM. If the Admin's client list needs more than one row, start a second agent
+*inside the same VM* under a different `--id`: separate `STATE_DIR` and separate
+registration (issues.md B21), and only ever send a lockout to one of them. D8's
+table is the boundary — telemetry, policy, reports and the audit trail all
+simulate fine that way; enforcement does not.
+
+Three things that turn "fits" into "comfortable":
+
+- **Install the Engine VM as a server, no desktop** — and on 8 GB, a *minimal*
+  one. **Debian netinst**, no tasksel selections: ~150–250 MB idle, ~4 GB on
+  disk, and `apt install python3` is the whole dependency list. Ubuntu Server
+  (~1 GB, ~5 GB) is the comfortable choice at 16 GB and pure overhead at 8.
+
+  **Alpine was the first choice here and is the wrong trade on this laptop.** It
+  is smaller again (~50–80 MB idle, ~2 GB disk), but `K:` has hundreds of GB
+  free, so those 2 GB buy nothing — while a stripped Python build risks not
+  carrying `sqlite3`, which the Engine needs for all persistence. Building the
+  VM twice costs more than the disk it saves. Section 0.1f checks for it
+  regardless.
+- **Dynamic Memory on the Windows client VM.** Three fields: *Startup* is what
+  Hyper-V commits at boot, *Minimum* the floor it can reclaim down to while the
+  VM runs, *Maximum* the ceiling it can grow to under pressure. Use **startup
+  2 GB, min 1 GB, max 3 GB** on an 8 GB host; 4 / 1 / 4 on 16 GB. Install with a
+  **static 4 GB** and switch afterwards either way — Windows Setup is happier
+  that way, and nothing else wants the RAM while it runs. On 8 GB also drop
+  *Memory buffer* from its 20% default to 5–10%; that is headroom Hyper-V
+  reserves above what the guest is actually using.
+- **Build the client VM from a trimmed image** (section 0.1e). Worth doing, but
+  note *why*: Dynamic Memory already reclaims most of what a debloat would save,
+  so the real win is **disk**, which is the tighter of the two constraints on
+  this laptop.
 
 **32 GB** removes the arithmetic entirely and leaves room for a second client VM
 for multi-client testing (issues.md B21, D8). 16 GB is workable for the plan as
-written.
+written; 8 GB is workable with the two conditions above.
 
 **Setup order:**
 
-1. Hyper-V Manager → *Virtual Switch Manager* → **New → Internal** → name it
+1. Hyper-V Manager → *Hyper-V Settings* → point **both** the virtual hard disk
+   and the virtual machine path at `K:`. This is first because it is not
+   optional: `C:` has under 5 GB free and cannot hold a guest at all.
+2. Hyper-V Manager → *Virtual Switch Manager* → **New → Internal** → name it
    `LabMonitor`.
-2. Give each VM a **second** adapter on *Default Switch* for provisioning
+3. Give each VM a **second** adapter on *Default Switch* for provisioning
    internet, and remove it once each machine has its packages. That is what
    keeps the lab network clean without fighting an offline install.
-3. Static addresses: host `192.168.100.1` on `vEthernet (LabMonitor)`, Engine
+4. Static addresses: host `192.168.100.1` on `vEthernet (LabMonitor)`, Engine
    `.2`, Client `.3`, `/24`, no gateway.
-4. Engine: `python3 -m engine --check`, then serve. It binds `0.0.0.0`, which on
+5. Engine: `python3 -m engine --check`, then serve. It binds `0.0.0.0`, which on
    this VM means only the isolated switch.
-5. Client: `python -m client --engine 192.168.100.2`.
-6. Admin: `python -m admin --engine 192.168.100.2`.
-7. `certs/` copied to all three; the pinned identity `labmonitor-engine` means
-   the addresses above never appear in the certificate.
+6. Client: `python -m client --engine 192.168.100.2`.
+7. Admin: `python -m admin --engine 192.168.100.2`.
+8. `certs/` travels with the repository, so it is already on all three; the
+   pinned identity `labmonitor-engine` means the addresses above never appear
+   in the certificate.
 
-Section 0.2 does not apply here — there is no NAT to bridge.
-
-### 0.1f Topology A — the fallback, for a machine short on disk
-
-One physical laptop, three environments. The Engine is Linux-only by design, so
-WSL covers it without a second machine; the Client goes in a Hyper-V VM because
-its tests are the ones you will want to repeat.
-
-| | Runs on | Why there |
-|---|---|---|
-| **Engine** | WSL, on the laptop | Linux-only by design (asyncio/epoll). Standard library only, so WSL needs no venv. |
-| **Administrator** | Windows, on the laptop | Needs Qt and a real display, and never needs reverting. |
-| **Client Agent** | Windows VM | Its tests take over a screen and install a service, so snapshots let you repeat them freely rather than once per sitting. |
-
-**This is the right assignment and the order does not need changing.** Each unit
-is where its constraints put it, and the one you will rerun most is the one that
-can be rolled back. Two sanity checks on it:
-
-- Putting the Admin in the VM and the Client on the host would be backwards —
-  the Admin is the one that never needs reverting.
-- Running the Engine in its own Linux VM buys nothing *on this laptop*, where
-  disk is the constraint — it is the same Linux either way. It buys plenty once
-  disk is not: see topology B in section 0.1.
-
-**Networking is simpler than it looks here**, because the protocol is
-client-initiated: the Client opens a persistent connection outward to the Engine
-and the Engine never dials back. So the VM does not need to be reachable from
-anywhere — it only needs to reach the host. A NAT'd Hyper-V **Default Switch**
-is sufficient, and avoids the brief host network drop that creating an External
-switch causes. Use External only if you also want the VM on the LAN for its own
-sake.
-
-What the VM still needs:
-
-- **A route from the VM into WSL.** WSL2 sits behind its own NAT inside the
-  host, so the Engine is not reachable from the VM by default. Use the **port
-  proxy** in section 0.2 — it forwards from the host's own addresses, including the
-  Default Switch one the VM talks to. (`networkingMode=mirrored` also solves it,
-  but do not use it here: it puts WSL on the host's *real* interfaces, which
-  exposes an unauthenticated Engine to whatever network you are on, and is
-  fragile offline. See section 0.1c.)
-- **An inbound firewall rule for TCP 5000** on the host.
-- **The `certs/` directory copied in**, at the same relative path. Clients pin
-  that exact certificate.
-- Point the client at the host's Default Switch address:
-  `python -m client --engine <host-vEthernet-ip>`.
-
-Confirm with `Test-NetConnection <host-ip> -Port 5000` from inside the VM before
-going further.
-
-#### Three things a VM cannot tell you
+### 0.1b Three things a VM cannot tell you
 
 Not blockers, but do not read a failure here as a code fault.
 
@@ -220,147 +217,26 @@ Not blockers, but do not read a failure here as a code fault.
 - **`--once` will report far fewer processes** than the ~212 seen on the host,
   with fewer window titles. That is a quiet VM, not a broken collector.
 
-### 0.1a One machine, if that is all you have
+### 0.1c No network needed
 
-All three run on a single laptop: **two on Windows** (Administrator, Client
-Agent) **and one in WSL** (Engine). Nothing in Parts 1–3 needs a second machine,
-and the whole command path — registration, telemetry, policy, reports, the audit
-trail — works end to end this way. WSL2's localhost forwarding means the client
-reaches the Engine at `127.0.0.1:5000` with no setup at all, so section 0.2 below can be
-skipped entirely.
-
-What a single machine **cannot** test:
-
-- **Anything the student would see.** The overlay would cover *your* screen and
-  disable *your* Task Manager for the length of the block. T4.2–T4.6 and
-  T5.5–T5.8 all want a machine you can hand over for a few minutes.
-- **The link itself.** A real network hop, the WSL NAT crossing, TLS against a
-  non-loopback address, and the reconnect/backoff behaviour of T5.3 are all
-  loopback no-ops on one box.
-- **Session 0 (C11).** Testing it means installing a boot-start service on your
-  dev machine. Removable with `--uninstall`, but not something to leave behind.
-
-So: use the host alone for Parts 1–3 and T5.1–T5.3, and bring in the VM for
-Part 4 and T5.4 onward. Running the client under `--id` on the same box as the
-Engine and Admin is not a compromise for any of the former — it is the same
-socket, protocol and database either way.
-
-### 0.1b What the second machine should be, and what it costs
-
-The staged plan — one machine now, a second one later — is the right order:
-everything that needs no second machine comes first.
-
-| | Money | Time | What it gets you |
-|---|---|---|---|
-| **Your own laptop, nothing else** | none | none | works; ties up your desktop, one careful run at a time |
-| **Windows VM on your laptop** | none | ~2h once | revert in seconds, repeat freely, desktop stays yours |
-| **Second physical laptop** | a laptop | ~1h once | real network and a real second screen |
-
-**Which tests this is about — everything else is ordinary.** Only **T4.2**
-(running the overlay) and **T5.4–T5.8** (installing the service and setting a
-block) take over a screen. Part 0 provisioning, Parts 1–3 and T5.1–T5.3 do
-nothing of the sort; they start processes, print things and exit.
-
-Nothing blocks a machine by itself. A block window exists only if an admin sends
-a schedule command, or you launch `overlay_app` by hand. `store_schedule` has
-exactly one caller — the handler for that admin command — and a client with no
-schedule file reports `lockout active False`, because `load_schedule` returns
-None rather than inventing anything. (The fail-closed synthetic block applies to
-a schedule that *exists* and fails its integrity check, so it cannot appear on a
-machine that was never given one.)
-
-**And when those tests do run**, the overlay covers the primary display and
-disables Task Manager for the length of the block. Blocks are capped at 2 hours,
-the overlay closes itself at its end time, and the Task Manager policy is
-restored on exit including on a crash. `install_service.py --uninstall` removes
-the service and the Scheduled Task. So the ceiling is a screen you cannot use
-for a couple of hours, not a machine to repair.
-
-Which is why testing on one machine is a legitimate choice. It is just tedious:
-each attempt costs you your desktop for the length of the block, so you end up
-running those few tests once carefully rather than as many times as it takes to
-understand what you are seeing. C11 is worth poking at repeatedly.
-
-**The VM is the best value, and you already have what it needs.**
-
-- **Hypervisor: free.** You are on Windows 11 **Pro**, so Hyper-V is included —
-  enable it under *Windows Features*. Prefer it over VMware/VirtualBox here for
-  a specific reason: WSL2 already requires the Hyper-V platform, so a
-  third-party hypervisor on the same host runs through a compatibility layer
-  and gives up some speed. Hyper-V avoids paying that twice.
-- **Windows: free for this purpose.** A retail Windows 11 ISO installs and runs
-  unactivated indefinitely — see section 0.1d.
-- **Disk: 64 GB**, thin-provisioned so it only grows as used. That is Windows
-  11's own minimum, not a comfort figure — Setup refuses less. Python plus
-  PySide6 adds ~400 MB.
-- **RAM: 4 GB** assigned while it runs. Comfortable if the host has 12 GB+.
-- **CPU: 2 vCPU.**
-- **Setup: ~2 hours**, most of it the Windows install running unattended.
-
-**Snapshots are the actual reason.** Take a checkpoint before
-`install_service`, run the tests, revert in seconds. That turns C11 and
-T5.5–T5.8 from one careful attempt into something you can repeat until you
-understand it, which is the difference between measuring the session-0 question
-and guessing at it.
-
-**Networking.** Default Switch and the section 0.2 port proxy, set out in section 0.1d and
-section 0.2 — including `Test-NetConnection` as the gate. An External switch is only
-worth it if you also want the VM on the LAN for its own sake.
-
-**When the physical laptop is still worth it.** A VM cannot tell you about real
-Wi-Fi behaviour, roaming, a dock changing the adapter, or a genuinely separate
-physical display. If you have a second laptop, use it for T5.1–T5.3 network
-realism and the VM for T5.4 onward. If you have to pick one, pick the VM: it is
-free, and it is the one that lets you repeat things.
-
-**Engine and Admin on one laptop is fine and is the intended dev setup.** They
-are different processes, in different operating systems, talking over a socket;
-WSL2 forwards `localhost`, so the Admin reaches the Engine at `127.0.0.1:5000`
-with no configuration. Nothing about co-locating them is a compromise — you are
-still exercising the real socket path, the real protocol and the real database.
-
-Two things to be aware of, neither a blocker:
-
-- **`ENGINE_HOST` means opposite things to the two units** — the bind address on
-  the Engine, the connect target on the Admin. They live in different shells
-  (WSL vs Windows) so they cannot collide, but don't export it globally.
-- **The database sits on `/mnt/c`** if you run the Engine from the Windows
-  filesystem. SQLite over that mount is slower than a native Linux path and its
-  locking is emulated. Run `python -m scripts.bench_database` once and note the
-  number; if it is unpleasant, copy the repo into the WSL filesystem
-  (`~/SystemMonitoring`) for the Engine only.
-
-### 0.1c Do you need a network? No — and offline is better
-
-**Nothing in this plan needs internet, Wi-Fi or a hotspot once the machines
-exist.** Every link is internal to the laptop:
+**Nothing here needs internet, Wi-Fi or a hotspot once the machines exist.**
+Every link is internal to the laptop:
 
 | Link | Carried by | Needs internet? |
 |---|---|---|
-| Admin → Engine | the Internal switch (WSL loopback under topology A) | no |
-| Client → Engine | the same Internal switch (Default Switch + proxy under A) | no |
+| Admin → Engine | the Internal switch | no |
+| Client → Engine | the same Internal switch | no |
 | VM clocks | Hyper-V Integration Services, synced from the host | no |
 
-The Default Switch runs its own DHCP and NAT on the host, so the VM gets an
-address and can reach the host with the laptop in airplane mode. Disconnecting
-the *virtual* adapter in the VM's settings is also how you test T5.3's reconnect
-backoff — no real network to unplug.
+Use a hotspot only for one-time provisioning — the Windows ISO, Python, `pip
+install` inside the VM — then move each VM onto `LabMonitor` and leave it there.
+The Internal switch carries no route anywhere, so the Engine is off every real
+network whether the laptop is online or not. That is also what keeps the stubbed
+authentication (`issues.md` C1) from being a live exposure for the whole of
+Phase 5 — it costs nothing extra, it is just where the machines already are.
 
-**Run it offline by preference, not just when convenient.** Authentication is a
-stub, so the only thing standing between the Engine and anyone on the same
-network is the network itself. Offline turns `issues.md` C1 from a live exposure
-into a theoretical one for the whole of Phase 5. Use the hotspot only for
-one-time provisioning — the Windows ISO, Python, `pip install` inside the VM —
-then take it off the network and leave it there.
-
-Under the chosen setup none of this needs managing: the Internal switch carries
-no route anywhere, so the Engine is off every real network whether the laptop is
-online or not.
-
-Under topology A it does need managing. **Do not use `networkingMode=mirrored`
-there** — it hands WSL the host's real interfaces, which is both the exposure
-above and fragile with no interfaces to share. Use the port proxy in section 0.2,
-bound to the Default Switch address.
+Disconnecting the *virtual* adapter in the VM's settings is how T5.3's reconnect
+backoff gets tested — no real network to unplug.
 
 ### 0.1d Building the VM
 
@@ -368,6 +244,9 @@ A retail **Win11 24H2 x64** ISO (~5.7 GB, multi-edition) is the right media.
 Choose **Pro** at the edition prompt: Home would run the agent fine, but Pro
 matches a managed lab machine and carries `gpedit.msc`, which is what T4.5 needs
 to reproduce the group-policy conflict C10 describes.
+
+That ISO is the *source*. The media the VM is actually installed from is the
+trimmed build produced in section 0.1e — everything below is unchanged either way.
 
 **Activation is not needed for any of this.** Left unactivated, Windows 11 runs
 indefinitely with cosmetic limits — a desktop watermark and locked
@@ -387,16 +266,11 @@ Use a key if you have one through your institution; do not buy one for this.
 | Disk | 64 GB dynamic VHDX | Win11 minimum |
 | Network | **Default Switch** | NAT; internet during provisioning, nothing afterwards |
 
-The networking step also offers *Not Connected* and a **WSL** switch. Not
-Connected is the state you switch to at step 8, not the one to install with.
-Leave the WSL switch alone despite the Engine living there — it is created and
-reconfigured by WSL rather than by you, and Hyper-V Firewall rules apply to it;
-Default Switch reaches the host just as well and stays put. The adapter can be
-changed any time in *VM Settings → Network Adapter*.
-
-Note the Default Switch's address range **changes when the host reboots**, so
-re-read the host's `vEthernet (Default Switch)` address when you get to section 0.2
-rather than recording it once.
+The networking step also offers *Not Connected* and a **WSL** switch. Ignore
+both: Default Switch reaches the internet for provisioning and stays put, and
+the WSL switch is created and reconfigured by WSL rather than by you. The
+adapter can be changed any time in *VM Settings → Network Adapter*, which is
+what step 8 does.
 
 **Leave the network connected until provisioning is finished.** Windows 11 24H2
 pushes a Microsoft account and an internet connection through OOBE, and the
@@ -415,143 +289,498 @@ up, then take it down for good once the machine is provisioned.
    (the VM runs only the Client, so the Admin file is not needed).
 5. `pip install -e .` — without it `from common.protocol import ...` will not
    resolve.
-6. Copy `certs/` in at the same relative path.
+6. `certs/` comes with the repository — nothing to generate or copy separately.
 7. `python -m client --check` — should resolve an id, report three MISSING
    bundles, and say `agent running False`.
-8. **Leave the VM on Default Switch.** Do not disconnect the adapter: that link
-   is how the client reaches the Engine, and Part 5 needs it. "Offline" means
-   the *Engine* is not reachable from any real network, which section 0.2
-   achieves by binding the proxy to the Default Switch address rather than by
-   unplugging anything. (Disconnecting the adapter is still how T5.3 simulates
-   network loss — temporarily, on purpose.)
+8. **Move the adapter to the `LabMonitor` switch** and set a static
+   `192.168.100.3/24`, no gateway. Default Switch was only ever for
+   provisioning. (Disconnecting the adapter is still how T5.3 simulates network
+   loss — temporarily, on purpose.)
 9. **Checkpoint: "baseline"**, before anything is installed as a service.
 
 Take a second checkpoint named **"pre-service"** immediately before T5.4's
 `install_service`, and revert to it after each attempt. That is the whole reason
 the VM is worth its two hours.
 
-### 0.2 Reaching WSL from the VM — topology A only
+### 0.1e The client VM's image — tiny11, not tiny11 Core
 
-Three environments, two NATs, and one link that needs building. What talks to
-what:
+**Decision: build the client VM's media with `scripts/build_client_image.ps1`
+from our own `Win11_24H2_English_x64.iso`. `tiny11maker.ps1` is the fallback if
+that script gives trouble. Not `tiny11Coremaker.ps1`, and not a pre-built tiny11
+ISO downloaded from anywhere.**
 
-```
-             HOST LAPTOP
-  ┌──────────────────────────────────────────┐
-  │  Admin (Windows)                         │
-  │      │                                   │
-  │      │ 127.0.0.1:5000                    │
-  │      │ WSL2 localhost forwarding         │
-  │      ▼                                   │
-  │  Engine (WSL)  ◄── port proxy ───┐       │
-  │                                  │       │
-  │        vEthernet (Default Switch)│       │
-  └──────────────────┬───────────────┴───────┘
-                     │  172.x.x.1:5000
-                     │  Hyper-V Default Switch (NAT)
-                     ▼
-              ┌─────────────┐
-              │ Client (VM) │
-              └─────────────┘
-```
+**Why debloat at all.** Not for RAM. Dynamic Memory (section 0.1) already returns
+what the guest is not touching, and the gap it leaves is small:
 
-- **Admin → Engine** needs no setup. Both are on the host, and WSL2 forwards
-  `localhost`, so the Admin connects to `127.0.0.1:5000`. The Default Switch is
-  not involved at all.
-- **Client → Engine** is the link that needs building. The VM reaches the host
-  on the Default Switch address, but the Engine is not on the Windows host — it
-  is inside WSL, behind a second NAT. The port proxy below bridges the two.
-- **Client → Admin never happens.** They never speak directly; every command and
-  every telemetry message goes through the Engine. So there is nothing to
-  configure between the VM and the Admin.
-- The Default Switch also NATs the VM out to the internet through the host. Same
-  adapter, different destination — useful during provisioning, irrelevant after.
+| Image | Idle RAM in use | Disk used |
+|---|---|---|
+| Stock Win11 24H2 Pro | ~2.0–2.5 GB | ~30 GB |
+| tiny11 (`tiny11maker.ps1`) | ~1.2–1.5 GB | ~12–18 GB |
+| tiny11 Core (`tiny11Coremaker.ps1`) | ~0.8–1.0 GB | ~8 GB |
 
-WSL2 sits behind its own NAT inside the host. `localhost` forwarding is what
-lets Windows-on-the-host reach it — and that does **not** extend to the VM. Left
-alone, the VM cannot see the Engine at all.
+The win is **disk** — a trimmed client VM is most of what brings the two-VM plan
+inside the space available on this laptop. A second win worth naming:
+tiny11 lets Defender go quietly, and Defender is a live nuisance here — the
+overlay disables Task Manager and Phase 8 ships PyInstaller-frozen helper exes,
+both textbook false positives.
 
-**Use a port proxy, bound to the Default Switch address — not to `0.0.0.0`.**
-From an **elevated** PowerShell on the host:
+**Why Core is refused.** Core drops WinSxS, the servicing stack, Windows Update,
+Defender and WinRE, and its own README says it cannot have features added
+afterwards and is for development/testing only. It buys ~500 MB over tiny11 —
+which Dynamic Memory largely gives us for free — and pays for it in exactly the
+subsystems this phase exists to measure:
+
+- **This VM is the measuring instrument for C11.** If the overlay does not appear
+  in T5.4, a Core image makes "SYSTEM in session 0 cannot reach the desktop"
+  indistinguishable from "the debloat removed something the graphics stack
+  needed". That is the one question the VM was built to answer.
+- **T4.5 needs `gpedit.msc`** to reproduce C10. Section 0.1d already chooses Pro
+  for that reason; Core's MMC trimming puts it back in doubt.
+- **Time sync.** Lockout schedules are HMAC-protected, time-based, 2-hour capped
+  and fail closed. If Core's trimming touches the Hyper-V guest services
+  (`vmicttimesync`), the guest clock drifts and T2.5 fails in a way that looks
+  precisely like a bug in `client/lockout.py`.
+- **PySide6 wants the MSVC 2015–2022 redistributable.** On a non-serviceable
+  image "install a redistributable" stops being a certainty.
+
+**Alternative worth knowing about: Win11 IoT Enterprise LTSC 2024.** An official
+Microsoft SKU, free 90-day evaluation ISO, no Store/Edge/Copilot/consumer apps by
+design, ~2 GB idle, fully serviceable, and it has `gpedit.msc`. Enterprise also
+matches a managed lab machine more closely than Pro does, and "we used Microsoft's
+LTSC lab SKU" is a better sentence at a defence than "we used a modified ISO".
+Snapshots make the 90-day limit irrelevant. Either choice is defensible; tiny11
+was picked because it starts from the ISO we already have.
+
+**Why our own script rather than tiny11builder.** Same mechanism — DISM against
+an offline image, plus offline registry edits — so this is not about tiny11builder
+being unsafe. It is about the *removal list being ours*. tiny11builder decides
+what a general-purpose debloated Windows should contain; we need a machine that
+keeps a specific and slightly unusual set of things (Task Scheduler, MMC/gpedit,
+`vmicttimesync`, the servicing stack, a re-enablable Defender) because each one
+is named in a Phase 5 test. A list we wrote is a list we can defend line by line,
+and when a test misbehaves the first question — "did the trim do this?" — has a
+short, readable answer instead of someone else's several-hundred-line script.
+
+`scripts/build_client_image.ps1` is that script, and **it is a keep-list, not a
+remove-list**: every provisioned Appx package is removed unless it is named.
+Kept, and nothing else — **Notepad, Snipping Tool, Windows Terminal**, the
+frameworks those three load against, and a protected set that is the shell
+itself (Start menu, File Explorer, OOBE, the credential and print dialogs).
+Adding an app back is a deliberate edit; forgetting to strip one is not
+possible.
+
+Removed outright rather than merely quietened: Edge, EdgeUpdate, EdgeCore and
+WebView2 (nothing here is a WebView2 host — the Admin and both helper windows
+are Qt/QML), the Store, OneDrive, Recall, Copilot, Photos, Paint, Media Player,
+Xbox, and 20-odd services for hardware or scenarios a lab VM does not have.
+Defender is off by policy *and* by service; its binaries stay because it is a
+protected component and pulling it offline breaks servicing, and `Start=2`
+restores it if a test ever wants a realistic machine.
+
+What the script refuses to touch is the more important list, and its header
+carries it with reasons: Task Scheduler, `gpsvc`/MMC/`gpedit.msc`, the `vmic*`
+integration services, DWM/`UxSms`, `TermService` (Enhanced Session is how the
+repo gets copied in), and the servicing stack. Those are not bloat — each one is
+named in a Phase 5 test, and removing them would make this VM unable to answer
+the question it was built for.
+
+#### What you actually type, and what each part means
+
+The script takes four things. Nothing here is guesswork — each one is a path you
+choose:
+
+| Flag | Plain English | This machine |
+|---|---|---|
+| `-SourceIso` | **Input.** The Windows ISO you already have. Read only; never modified | `K:\Disc\Win11_24H2_English_x64.iso` |
+| `-Scratch` | **Workbench.** A temporary folder the script creates, fills, and wipes at the start of every run. Do not put anything of your own here | `K:\labimage` |
+| `-OutputIso` | **Result.** The new, trimmed ISO. This is the file you point the VM at | `K:\win11-labclient.iso` |
+| `-DryRun` | **Look, don't touch.** Prints what it *would* remove and stops. Writes nothing | — |
+
+Everything is on `K:` because **`C:` has ~7 GB free and `K:` has ~640 GB**. The
+defaults in the script point at `C:` and will refuse to run here — that is the
+error working as intended, not a fault. Hyper-V's default VM location is on `C:`
+too, so set *Hyper-V Manager → Hyper-V Settings → Virtual Hard Disks / Virtual
+Machines* to a `K:` path before creating the VM. Section 0.0's disk constraint,
+showing up in practice rather than in principle.
+
+#### Step 1 — the dry run (do this first)
+
+Needs ~3 GB, a few minutes, and **no ADK**. It mounts the ISO's `install.wim`
+read-only in place, so it skips both the media copy and the recompress. Open
+**Windows PowerShell as Administrator**, then:
 
 ```powershell
-$wsl  = (wsl -- hostname -I).Trim().Split()[0]
-$host_ip = (Get-NetIPAddress -InterfaceAlias "vEthernet (Default Switch)" -AddressFamily IPv4).IPAddress
-
-netsh interface portproxy add v4tov4 listenport=5000 listenaddress=$host_ip connectport=5000 connectaddress=$wsl
-netsh advfirewall firewall add rule name="LabMonitor Engine" dir=in action=allow protocol=TCP localport=5000
+cd C:\Users\Khonello\Documents\Developer\Languages\Multi\SystemMonitoring
+Set-ExecutionPolicy Bypass -Scope Process
+.\scripts\build_client_image.ps1 -SourceIso "K:\Disc\Win11_24H2_English_x64.iso" -Scratch K:\labimage -DryRun
 ```
 
-`listenaddress` is what makes this safe rather than merely working. Bound to
-`0.0.0.0` the proxy answers on *every* host interface, so an Engine that
-authenticates nobody would be reachable from whatever Wi-Fi the laptop is on.
-Bound to the Default Switch address it answers only on the virtual network
-between the host and the VM — which is the only place it is needed, and is true
-whether or not the laptop is online.
+It prints one line per package, capability and feature it found in the image:
 
-That is also why **`networkingMode=mirrored` is the wrong fix here** despite
-being one line: it gives WSL the host's real interfaces, which is exactly the
-exposure this avoids.
+| Line | Meaning |
+|---|---|
+| `KEEP` | on the keep-list — Notepad, Snipping Tool, Terminal, or a framework they need |
+| `PROTECTED` | the shell itself; removing it would break the desktop |
+| `REMOVE` | everything else |
 
-**Both NAT addresses change when the host reboots** — the WSL one and the
-Default Switch one — so this needs redoing after a restart. To undo:
+**Read that output before building.** If something you want shows as `REMOVE`,
+add it to `$KeepAppx` in the script; if something load-bearing shows as `REMOVE`,
+add it to `$ProtectedAppx`. That is the whole point of the dry run — it is
+cheaper to fix the list here than after a 45-minute build.
+
+**What the dry run showed on our media** (`Win11_24H2_English_x64.iso`, Pro is
+index 6), recorded because the next person will wonder whether this is normal:
+
+- **44 of 47 provisioned packages removed.** The three kept are Notepad,
+  Snipping Tool and Terminal — exactly the keep-list.
+- **No `PROTECTED` lines at all, and that is expected.** The shell apps
+  (`Client.CBS`, `StartMenuExperienceHost`, `FileExp`, `CloudExperienceHost`)
+  are not *provisioned* packages; they live in `\Windows\SystemApps`, where
+  `Remove-ProvisionedAppxPackage` cannot reach them. The shell is safe by
+  construction. `$ProtectedAppx` stays as a guard rail because what Microsoft
+  provisions has changed before.
+- **No framework packages listed either.** VCLibs / UI.Xaml / WindowsAppRuntime
+  ship as dependencies inside each app's bundle on 24H2 rather than as separate
+  provisioned entries, so keeping the three apps keeps what they need.
+- **Copilot and Widgets go as `MicrosoftWindows.Client.WebExperience`** — that
+  one package is the host for both. There is no separate `Microsoft.Copilot`
+  entry on this media.
+- **199 of 425 capabilities removed**, almost all per-locale:
+  `Language.Handwriting` (89), `Language.TextToSpeech` (49), `Language.OCR` (35),
+  `Language.Speech` (17), plus nine singles. `Language.Basic` is untouched.
+- **Optional features: `Recall` reports `absent`.** It is not in 24H2 RTM media —
+  it arrives through Windows Update on Copilot+ hardware. It stays in
+  `$DisableFeatures` anyway (one `absent` line, and it covers us if the media
+  changes), and the `DisableAIDataAnalysis` / `AllowRecallEnablement` policy keys
+  block it regardless. `Internet-Explorer-Optional-amd64` is likewise absent
+  because IE is now the `Browser.InternetExplorer` *capability*, which is removed.
+- **`MSRDC-Infrastructure` was dropped from the disable list** after the dry run
+  surfaced it. It is Remote Desktop infrastructure, and Hyper-V Enhanced Session
+  — which section 0.1d depends on to copy the repo into the VM — is RDP over
+  VMBus. A few MB of saving is not worth putting a documented dependency in
+  doubt. This is the dry run doing its job.
+
+**Consequence worth accepting deliberately: the VM will have no image viewer.**
+Photos and Edge are both removed, so a saved `.png` has no default handler.
+Snipping Tool still displays what it just captured, which is what T4.x evidence
+actually needs, and screenshots belong on the host with the results table
+anyway — copy them out over Enhanced Session. If you would rather keep a viewer,
+add `Microsoft.Windows.Photos` to `$KeepAppx`.
+
+**Some policy writes are refused by the image, and that is expected.** A few
+registry keys ship TrustedInstaller-owned with Administrators read-only, and
+taking ownership of an offline hive needs a privilege PowerShell does not hold.
+The build continues and **lists every refused write at the end of the registry
+step** — read that list rather than assuming it is empty. A refusal is only
+acceptable if something else reaches the same outcome.
+
+On our 24H2 media, two were refused, and **both concern Widgets**:
+
+| Refused | Covered by |
+|---|---|
+| `SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` | the Widgets host package `MicrosoftWindows.Client.WebExperience` is removed outright |
+| `…\Explorer\Advanced\TaskbarDa` (default user) | the same package removal |
+
+So the outcome holds — but note the honest gap. `TaskbarDa` was refused while
+`HideFileExt`, `LaunchTo`, `ShowTaskViewButton` and `TaskbarMn` in the *same key*
+succeeded, and that is **unexplained**: registry values do not carry their own
+ACLs, so the usual TrustedInstaller story does not account for it. It is not
+worth chasing, because the package removal already settles Widgets — but it does
+mean the belt-and-braces here is thinner than intended, so **confirm it on the
+running VM** rather than trusting the policy (gate table below).
+
+Two other removals worth being sure about: `Microsoft.DesktopAppInstaller`
+(winget — not needed, Python installs from its own `.exe`; `-KeepWinget` keeps
+it) and `Microsoft.SecHealthUI` (the Windows Security window — consistent with
+Defender being off, but note that re-enabling Defender later leaves it with no
+UI).
+
+#### Step 2 — install the ADK
+
+Only needed for the real build. See the ADK note below.
+
+#### Step 3 — the build
+
+~25 GB of scratch, 30–60 minutes:
 
 ```powershell
-netsh interface portproxy delete v4tov4 listenport=5000 listenaddress=$host_ip
-netsh advfirewall firewall delete rule name="LabMonitor Engine"
+.\scripts\build_client_image.ps1 -SourceIso "K:\Disc\Win11_24H2_English_x64.iso" -Scratch K:\labimage -OutputIso K:\win11-labclient.iso
 ```
 
-Confirm from inside the VM before going further, using that same host address:
+Then create the Hyper-V VM per section 0.1d, but attach `K:\win11-labclient.iso`
+as the DVD instead of the retail ISO. Everything else in 0.1d is unchanged.
+
+#### The remaining flags
+
+`-Edition` (defaults to `Windows 11 Pro`, for the `gpedit.msc` reason in
+section 0.1d), `-KeepWinget`, `-RemoveFeaturePayload` for the last GB at the cost
+of some serviceability, and `-SkipCompress` for a faster, larger build while
+iterating on the list. `-AdminUser`/`-AdminPassword` name the local account the
+injected `autounattend.xml` creates (default `lab`/`lab` — fine for an isolated
+VM, and section 0.1c explains why that is not a real exposure).
+
+**`commands.md` carries the full parameter table** — every flag, its type, its
+default and what it does. This section is the walkthrough; that one is the
+reference, and it is the one to update when a flag changes.
+
+#### The one prerequisite: the Windows ADK
+
+**Status when this was written: not installed on the host.** There is a
+`C:\Program Files (x86)\Windows Kits\10` folder, but it holds only `Debuggers`,
+`Catalogs` and `UnionMetadata` from some other SDK — no `Assessment and
+Deployment Kit`. Check with:
 
 ```powershell
-Test-NetConnection <default-switch-ip> -Port 5000
+Test-Path "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
 ```
 
-`TcpTestSucceeded : True` is the gate. If it is False, nothing in Part 5 will
-work and the fault is here, not in the code.
+**What it is.** The **Windows ADK** (Assessment and Deployment Kit) is
+Microsoft's free toolkit for building and deploying Windows images — standard IT
+tooling, not something this project invented, and not a third-party download.
+
+**Why we need it.** Exactly one file: `oscdimg.exe`. Producing a *bootable* ISO
+is not zipping a folder; the image needs UEFI and BIOS boot records written into
+specific places on the media, and no built-in Windows tool does that. `oscdimg`
+is Microsoft's tool for it. It is the last step of the build and nothing else in
+the project uses it.
+
+**Which one.** ADK **10.1.26100.2454 (December 2024)** — the version that
+supports Windows 11 24H2 and 25H2. Listed at
+<https://learn.microsoft.com/windows-hardware/get-started/adk-install>, direct
+download <https://go.microsoft.com/fwlink/?linkid=2289980>. The download is a
+~2.2 MB `adksetup.exe` stub that then fetches only the features you select.
+
+**Already downloaded to `K:\adksetup.exe`**, Authenticode signature checked and
+valid (`CN=Microsoft Corporation`). Re-verify any fresh copy the same way:
+
+```powershell
+Get-AuthenticodeSignature K:\adksetup.exe | Select-Object Status, SignerCertificate
+```
+
+**Installing it.** From an **elevated** prompt:
+
+```powershell
+K:\adksetup.exe /quiet /features OptionId.DeploymentTools
+```
+
+`/features OptionId.DeploymentTools` is what keeps this to **~500 MB** — the
+interactive installer preselects several GB (Windows PE, USMT, the Performance
+Toolkit) and none of it is used here. It runs silently with no progress bar.
+Confirm with the `Test-Path` above.
+
+**`/installpath` does not work on this host, and the failure is silent.** With
+`/quiet` the installer just returns to the prompt; the reason is only in
+`%TEMP%\adk\*.log`:
+
+```
+ERROR: Cannot set the path to K:\ADK because another installation has already
+been detected. Additional programs will have to be installed to the previously
+selected install path C:\Program Files (x86)\Windows Kits\10\.
+```
+
+An existing `Windows Kits\10` (here: `Debuggers`, `Catalogs`, `UnionMetadata`
+from another SDK) pins the install root, and `/installpath` is refused with exit
+code `0x3e9`. Elevation is *not* the problem — check `WixBundleElevated = 1` in
+the same log before assuming it is. Install to the default location; ~500 MB on
+`C:` is affordable even at ~7 GB free (measured: 6.9 → 6.4 GB).
+
+**`/quiet` returns immediately — that is "started", not "finished".** The
+bundle detaches, so `Test-Path` run straight afterwards will say `False` and
+mean nothing. The install takes a few minutes and is only observable in
+`%TEMP%\adk\*.log` or by watching for `adksetup`/`msiexec` processes. Note this
+is the *same* silent return that hid the `/installpath` failure above; the shell
+gives you no way to tell the two apart, only the log does.
+
+**When a non-default location is unavoidable**, pass the tool's path explicitly
+rather than relying on the probe:
+
+```powershell
+-OscdimgPath "<somewhere>\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
+```
+
+With a default install the flag is unnecessary — the script finds `oscdimg.exe`
+on its own.
+
+**No reboot needed**, and nothing about the ADK changes how this machine
+behaves; it is a folder of tools, not a service.
+
+**One security note, recorded rather than acted on.** Microsoft flags
+CVE-2026-25166 in **WSIM** (Windows System Image Manager), which ships inside
+Deployment Tools, and recommends ADK patch KB5079391. We never run WSIM — the
+`autounattend.xml` is generated by the script, not authored in WSIM — and the
+vulnerability is in processing answer files, so it is not on our path. Apply the
+patch anyway if the machine will keep the ADK around; it is a small download
+from the ADK servicing page.
+
+The script deliberately **will not download** `oscdimg.exe`, which is where it
+differs from `tiny11maker.ps1`. A build tool fetched at runtime and then used to
+assemble an operating system image is the one thing here worth being fussy
+about.
+
+**The dry run does not need any of this** — run the classification pass first,
+and only install the ADK once the keep-list looks right.
+
+**Fallback: `tiny11maker.ps1`.** If the script above fails on your media, clone
+<https://github.com/ntdevlabs/tiny11builder>, mount the source ISO, and from an
+elevated PowerShell 5.1 prompt run
+`.\tiny11maker.ps1 -ISO <letter> -SCRATCH <letter>` (letters only, no colon),
+choosing **Pro** at the SKU prompt; output is `tiny11.iso` beside the script.
+Do **not** download someone's pre-built `tiny11.iso` — an unverifiable third
+party's Windows is a poor choice of measuring instrument.
+
+Either build changes one thing about section 0.1d's install: the injected
+`autounattend.xml` bypasses the Microsoft-account requirement, so the
+`ms-cxh:localonly` dance is not needed. Keep the 64 GB dynamic VHDX regardless —
+it is thin-provisioned and only grows as used, so a smaller disk buys nothing and
+costs headroom.
+
+**Gate the image before trusting a single Phase 5 result.** A modified Windows is
+only sound as a test bed if it is *shown* to be, so run this before recording
+anything in the results table:
+
+| Check | Passes if |
+|---|---|
+| `python -m client --check` | resolves an id, three MISSING bundles, `agent running False` |
+| `python -m client --once` | one collection cycle prints, no collector errors |
+| `python -m client --dialog-demo` equivalent (T4.1) | the QML dialog renders and returns its exit code |
+| Overlay (T4.2) | renders full-screen, Task Manager policy applies *and* is restored |
+| `schtasks /Create` then `/Query` | task registers and is listed |
+| `install_service.py` (T5.4) | service registers and starts |
+| `w32tm /query /status` | guest clock is tracking the host |
+| Taskbar and Start | no Widgets, no Copilot, no Store — the two refused policy writes above are only covered if this holds |
+
+**Keep a stock-Win11 checkpoint as the control.** If any Phase 5 test behaves
+strangely, the question "is this our bug or the debloat?" is then answered by a
+revert and a re-run rather than by argument.
+
+### 0.1f Building the Engine VM
+
+The small one. Well under an hour, and almost none of it is waiting.
+
+**Media**: a **Debian netinst** for amd64 (~630 MB) from `debian.org`. Section
+0.1 records why this rather than Alpine or Ubuntu Server.
+
+**Hyper-V settings:**
+
+| Setting | Value | Why |
+|---|---|---|
+| Generation | **2** | UEFI, matching the client VM. Cannot be changed after creation |
+| Secure Boot | template ***Microsoft UEFI Certificate Authority***, or off | A Gen 2 VM defaults to the *Microsoft Windows* template, which **will not boot Debian** and fails without naming the reason. This is the setting that costs an evening |
+| Memory | **512 MB, static** | Dynamic Memory needs the guest balloon driver and buys nothing at this size |
+| Virtual processors | 1 | The Engine is single-threaded asyncio |
+| Disk | 8 GB dynamic VHDX | ~4 GB used after install; dynamic, so it only grows into it |
+| Network | **Default Switch** to provision, `LabMonitor` afterwards | Same pattern as the client VM |
+| Automatic Stop Action | **Shut down** | Otherwise Hyper-V holds a `.bin` file the size of assigned RAM the whole time the VM runs |
+
+**At the installer**: deselect everything in tasksel — no desktop, no print
+server. Keep *standard system utilities*, and the SSH server if offered, since
+`scp` is an easier way to get the repository in than the Hyper-V console.
+
+**Provisioning, in order:**
+
+1. `sudo apt install python3` — the whole dependency list. The Engine imports
+   only the standard library.
+2. **`python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`.** Do this
+   before anything else. The Engine owns all persistence through SQLite, and it
+   is the one stdlib module a minimal image can be built without. Debian carries
+   it; the check is here so a smaller image chosen later cannot fail quietly.
+3. Copy the repository in. `certs/` comes with it — nothing to generate.
+4. Nothing to `pip install`. Run from the repo root so `common/` resolves.
+5. `python3 -m engine --check` — T1.1 has what to expect.
+6. Static `192.168.100.2/24`, no gateway, in `/etc/network/interfaces`. Remove
+   the provisioning adapter.
+7. **Checkpoint: "baseline"**, so `monitoring.db` can be put back to empty
+   between runs.
 
 ### 0.3 Install
 
-Host (Engine + Admin) and VM (client only):
+Three machines, three different installs:
 
-```powershell
-pip install -r requirements.txt -r requirements-admin.txt -r requirements-client.txt   # A
-pip install -r requirements.txt -r requirements-client.txt                             # B
-```
+| Machine | Install |
+|---|---|
+| Host (Admin) | `pip install -r requirements.txt -r requirements-admin.txt`, then `pip install -e .` |
+| Client VM | `pip install -r requirements.txt -r requirements-client.txt`, then `pip install -e .` |
+| Engine VM | **nothing** — standard library only. Run `python3 -m engine` from the repo root so `common/` resolves. |
 
-The Engine needs nothing installed in WSL — it is standard library only.
+`pip install -e .` is what makes `from common.protocol import ...` resolve on
+the two Windows machines.
 
-### 0.4 TLS
+### 0.4 TLS — already done, nothing to do
 
-TLS is presence-based: once `certs/engine-cert.pem` exists, all three units use
-it with no flag. Generate **once**, on the host:
+**`certs/` is already generated and lives in the repository**, so it travels
+with the copy you put on each machine. TLS is presence-based: once
+`certs/engine-cert.pem` exists, all three units use it with no flag. There is
+no step here.
 
-```powershell
-python -m scripts.generate_cert
-```
+Two things that only matter if something goes wrong:
 
-Then copy the whole `certs/` directory into the VM at the same relative path.
-Clients pin that exact certificate and verify against the fixed identity
-`labmonitor-engine`, not the IP — so the host's address can change without
-breaking anything, but a *regenerated* certificate breaks every client until
-it is re-copied.
+- **Do not regenerate the certificate.** `python -m scripts.generate_cert` would
+  invalidate every client until the new `certs/` is re-copied everywhere.
+  Clients pin that exact file and verify against the fixed identity
+  `labmonitor-engine`, not the IP, so addresses can change freely — a new
+  certificate cannot.
+- **If you need TLS out of the way** while diagnosing something else, `--no-tls`
+  on all three. All three, or the Engine refuses the client and the reason is
+  not obvious. Put it back before calling Phase 5 done.
 
-To take TLS out of the picture while diagnosing something else, `--no-tls` on
-all three. Put it back before you call Phase 5 done.
+- [ ] **T0.1** `Test-NetConnection 192.168.100.2 -Port 5000` from the client VM
+      returns `TcpTestSucceeded : True`
+- [ ] **T0.2** `certs/` present on all three, same files
 
-- [ ] **T0.1** `Test-NetConnection` from B to A on 5000 succeeds
-- [ ] **T0.2** `certs/` present on both machines, same files
+### 0.5 Part 0 as a checklist
+
+**Already done**: the trimmed ISO (`K:\win11-labclient.iso`), the Windows ADK,
+and `certs/`. **One download outstanding**: the Debian netinst (~630 MB), for
+the Engine VM. Everything below is what remains.
+
+**Host — needs an elevated PowerShell**, or the Hyper-V cmdlets refuse
+
+- [ ] Hyper-V Settings → point both the VHD and the VM path at `K:` — mandatory, not tidiness: `C:` has under 5 GB free
+- [ ] Virtual Switch Manager → **New → Internal**, named `LabMonitor`
+- [ ] Host adapter `vEthernet (LabMonitor)` → static `192.168.100.1/24`
+
+**Client VM** — section 0.1d
+
+- [ ] Create: Gen 2, 2 vCPU, 64 GB dynamic VHDX, **static 4 GB** for install, Default Switch
+- [ ] *Settings → Security* → **enable TPM**, before first boot
+- [ ] *Settings* → **Automatic Stop Action → Shut down** — otherwise Hyper-V holds a `.bin` file the size of assigned RAM the whole time the VM runs
+- [ ] Install from `K:\win11-labclient.iso`, edition **Pro**, network up through OOBE
+- [ ] Python 3.10+ with *Add to PATH*, then copy the repository in
+- [ ] `pip install -r requirements.txt -r requirements-client.txt`, then `pip install -e .`
+- [ ] `python -m client --check` → id resolves, three MISSING bundles, `agent running False`
+- [ ] Switch to Dynamic Memory: **Startup 2 GB, Minimum 1 GB, Maximum 3 GB**, buffer 5–10%
+- [ ] Move the adapter to `LabMonitor`, static `192.168.100.3/24`, no gateway
+- [ ] Checkpoint **"baseline"**
+- [ ] Run the section 0.1e gate table — 8 checks
+- [ ] Checkpoint **"pre-service"**
+
+**Engine VM** — section 0.1f
+
+- [ ] Create: Gen 2, 1 vCPU, **512 MB static**, 8 GB dynamic VHDX, Default Switch
+- [ ] *Settings → Security* → Secure Boot template **Microsoft UEFI Certificate Authority**, or off — the *Microsoft Windows* default will not boot Debian
+- [ ] *Settings* → **Automatic Stop Action → Shut down**
+- [ ] Install Debian netinst, **deselect everything in tasksel** — no desktop
+- [ ] `sudo apt install python3`
+- [ ] `python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`
+- [ ] Copy the repository in (`certs/` comes with it); nothing to `pip install`
+- [ ] Move the adapter to `LabMonitor`, static `192.168.100.2/24`, no gateway
+- [ ] `python3 -m engine --check`
+- [ ] Checkpoint **"baseline"**
+
+**Gate** — T0.1 and T0.2 above. Part 1 does not start until both pass.
 
 ---
 
-## Part 1 — Engine, alone (its VM; or WSL under topology A)
+## Part 1 — Engine, alone (its VM)
 
 Nothing else running for any of this.
 
 ### T1.1 — Configuration and database
 
+On the Engine VM, from the repo root:
+
 ```bash
-wsl -- bash -lc "cd /mnt/c/.../SystemMonitoring && python3 -m engine --check"
+python3 -m engine --check
 ```
 
 Expect: listen address `0.0.0.0:5000`, the resolved database path, max clients
@@ -570,7 +799,7 @@ Check specifically:
 ### T1.2 — Serving
 
 ```bash
-wsl -- bash -lc "cd /mnt/c/.../SystemMonitoring && ENGINE_LOG_LEVEL=DEBUG python3 -m engine"
+ENGINE_LOG_LEVEL=DEBUG python3 -m engine
 ```
 
 Expect a listening log line and then silence — no peers yet. Leave it running
@@ -776,10 +1005,10 @@ Only now does anything talk to anything.
 
 ### T5.1 — Registration and heartbeat
 
-Engine running in WSL with `ENGINE_LOG_LEVEL=DEBUG`. In the VM:
+Engine VM running with `ENGINE_LOG_LEVEL=DEBUG`. In the client VM:
 
 ```powershell
-python -m client --engine <host-ip> -v
+python -m client --engine 192.168.100.2 -v
 ```
 
 Expect on the Engine: a registration line naming the client id, then a heartbeat

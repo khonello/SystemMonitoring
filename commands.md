@@ -15,6 +15,7 @@ are right.
 - [Administrator](#administrator--python--m-admin)
 - [Shared scripts](#shared-scripts)
 - [Lab provisioning — `build_client_image.ps1`](#lab-provisioning--build_client_imageps1)
+- [Lab provisioning — `setup_lab_vms.ps1`](#lab-provisioning--setup_lab_vmsps1)
 - [labmonitor.py](#labmonitorpy--dev-box-dispatcher)
 - [Diagnostics index](#diagnostics-index)
 
@@ -284,6 +285,50 @@ previous failed run and reuses it, rather than making every retry start with a
 manual `Dismount-DiskImage`. And on any failure inside the mounted image it
 unmounts with `/Discard`, so a bad run never leaves a half-modified image
 mounted under `-Scratch`.
+
+---
+
+## Lab provisioning — `setup_lab_vms.ps1`
+
+The other host-side script. It builds the Phase 5 lab itself: Hyper-V storage on
+`K:`, the `LabMonitor` Internal switch, and both VMs. It installs no operating
+system — that half stays interactive. `testing.md` sections 0.1, 0.1d and 0.1f
+are the rationale; this is the flag reference.
+
+```powershell
+# Elevated Windows PowerShell 5.1, from the repo root
+.\scripts\setup_lab_vms.ps1 -DryRun
+.\scripts\setup_lab_vms.ps1
+```
+
+| Parameter | Default | What it is |
+|---|---|---|
+| `-ClientIso` | `K:\Win11-LabClient.iso` | Trimmed media from `build_client_image.ps1` |
+| `-EngineIso` | `K:\debian-netinst.iso` | Debian netinst. **Missing is not fatal** — the Engine VM is skipped with a notice and the rest still runs; re-run once it has downloaded |
+| `-LabRoot` | `K:\LabMonitor` | Where VMs and VHDXs go. Refuses `C:`, which has under 5 GB free |
+| `-ClientName` / `-EngineName` | `LabClient` / `LabEngine` | VM names |
+| `-SwitchName` | `LabMonitor` | Internal switch, and the `vEthernet (…)` adapter named after it |
+| `-HostIp` / `-Prefix` | `192.168.100.1` / `24` | Host address on that adapter |
+| `-DryRun` | off | Print every action, change nothing. **Run this first** |
+
+**Why this exists rather than the wizard.** Three settings cannot be changed
+after a VM is created, and all three fail with messages that do not name the
+cause: Generation 2; the virtual TPM (present on Gen 2 but **off by default**,
+and the wizard never offers it — Windows Setup then refuses with "This PC can't
+run Windows 11"); and the Secure Boot template, which defaults to
+*MicrosoftWindows* and will not boot Debian. The script sets all three per VM,
+along with `AutomaticStopAction ShutDown` — otherwise Hyper-V holds a `.bin`
+file the size of assigned RAM the whole time a VM runs.
+
+**Idempotent.** Existing directories, switches, addresses and VMs are reported
+and left alone, so it is safe to re-run after fixing one thing. That is also how
+the Engine VM gets added once its ISO arrives.
+
+**What it deliberately leaves undone.** Dynamic Memory is not applied to the
+client VM — Windows Setup misbehaves under a moving allocation, so the VM is
+created with a static 4 GB and the script prints the exact `Set-VM` line to run
+afterwards. Both VMs are created on *Default Switch* for provisioning internet
+and move to `LabMonitor` by hand later.
 
 ---
 
