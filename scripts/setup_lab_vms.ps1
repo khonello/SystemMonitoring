@@ -36,7 +36,18 @@
       - Anything to the guests. No OS, no Python, no repository.
 
 .PARAMETER ClientIso
-    Trimmed Windows 11 media from scripts/build_client_image.ps1.
+    Windows 11 media. Defaults to the STOCK retail ISO, deliberately.
+
+    The trimmed image from scripts/build_client_image.ps1 was tried first and
+    abandoned: it installs, but OOBE never records completion, so the machine
+    loops back to "choose country or region" forever. Both Windows Hello
+    enrolment screens also fail (OOBEMSAHELLO, OOBELOCALHELLO) and must be
+    skipped by hand. The autounattend account is created correctly, which is
+    how you can tell the trim -- not the unattend -- is what broke.
+
+    The trim's stated win was disk (testing.md 0.1e), and disk stopped being
+    the constraint: K: has ~625 GB free. Pass -ClientIso explicitly if you ever
+    want to retry the trimmed media.
 
 .PARAMETER EngineIso
     Debian netinst. If it is not there yet, the Engine VM is skipped with a
@@ -59,7 +70,7 @@
 
 [CmdletBinding()]
 param(
-    [string] $ClientIso  = 'K:\Win11-LabClient.iso',
+    [string] $ClientIso  = 'K:\Win11_24H2_English_x64.iso',
     [string] $EngineIso  = 'K:\debian-netinst.iso',
     [string] $LabRoot    = 'K:\LabMonitor',
     [string] $ClientName = 'LabClient',
@@ -220,6 +231,13 @@ function New-LabVm {
     Set-VM -Name $Name -AutomaticStopAction ShutDown -AutomaticStartAction Nothing
     Set-VM -Name $Name -SmartPagingFilePath $vmPath -SnapshotFileLocation $vmPath
 
+    # Windows 11 Hyper-V takes an automatic checkpoint on first start, which
+    # puts the VM on a differencing disk before it has even installed. That
+    # collides with the deliberate baseline/pre-service checkpoints Phase 5
+    # reverts to. Clear a stray one with Remove-VMSnapshot, never by deleting
+    # the .avhdx -- that breaks the disk chain.
+    Set-VM -Name $Name -AutomaticCheckpointsEnabled $false
+
     if ($EnableTpm) {
         # A TPM needs a key protector before it can be enabled.
         Set-VMKeyProtector -VMName $Name -NewLocalKeyProtector
@@ -229,8 +247,14 @@ function New-LabVm {
     Set-VMFirmware -VMName $Name -EnableSecureBoot On -SecureBootTemplate $SecureBootTemplate
 
     Add-VMDvdDrive -VMName $Name -Path $Iso
+
+    # DVD first, hard disk second, and no network entry at all. PXE has no boot
+    # server on the Default Switch, so leaving it in the order only means a
+    # missed "press any key" prompt costs 30+ seconds instead of a few.
+    # testing.md 0.1d explains why that prompt is so easy to miss.
     $dvd = Get-VMDvdDrive -VMName $Name
-    Set-VMFirmware -VMName $Name -FirstBootDevice $dvd
+    $hd  = Get-VMHardDiskDrive -VMName $Name
+    Set-VMFirmware -VMName $Name -BootOrder $dvd, $hd
 
     Ok "'$Name' created"
 }
@@ -254,25 +278,50 @@ if ($haveEngineIso) {
 Step 'Done. What is left, in order:'
 
 @"
+  BEFORE YOU START EITHER VM -- the boot prompt is easy to miss
+    Windows and Debian media both show a "press any key to boot" prompt for
+    about five seconds. VMConnect renders nothing until it attaches, so if you
+    start the VM and THEN open its window, the window opens after the prompt
+    has already expired and every key you press does nothing. It looks exactly
+    like a broken keyboard. The order that works:
+
+      1. Leave the VM off.
+      2. Open its console first (double-click it in Hyper-V Manager).
+      3. Click inside the black area so the window has focus.
+      4. Action -> Start, from inside that window.
+      5. Tap the spacebar continuously from the moment you click Start.
+
+    PXE is already out of the boot order, so a missed prompt costs a few
+    seconds. testing.md 0.1d has the full account.
+
   CLIENT VM  ($ClientName)
-    1. Start it and install Windows. Edition Pro. Leave the network up
-       through OOBE -- 24H2 fights offline installs.
-    2. Python 3.10+, tick "Add python.exe to PATH".
-    3. Copy the repository in (Enhanced Session drive redirection).
+    1. Start it and install Windows. At the edition prompt choose
+       WINDOWS 11 PRO -- T4.5 needs gpedit.msc, which Home does not have.
+    2. Stock media carries no autounattend.xml, so make the local account
+       by hand at OOBE. The route on Pro:
+         "Set up for work or school" -> Sign-in options -> Domain join instead
+       Then user lab, password lab. Leave the network up through OOBE;
+       24H2 fights offline installs.
+    3. Defender is live on stock media. It is a false-positive risk for the
+       overlay (it disables Task Manager) and for Phase 8's PyInstaller
+       exes. Add exclusions when it first bites; do not disable it blind.
+    4. Python 3.10+, tick "Add python.exe to PATH".
+    5. Copy the repository in (Enhanced Session drive redirection).
        COPY, DO NOT git clone -- certs/ is gitignored and a clone leaves
        this machine on plaintext while the Engine uses TLS (0.4).
-    4. pip install -r requirements.txt -r requirements-client.txt
+    6. pip install -r requirements.txt -r requirements-client.txt
        pip install -e .
-    5. python -m client --check
+    7. python -m client --check
        -> id resolves, three MISSING bundles, "agent running False"
-    6. SHUT DOWN, then switch to Dynamic Memory:
+    8. SHUT DOWN, then switch to Dynamic Memory:
          Set-VM -Name $ClientName -DynamicMemory -MemoryStartupBytes 2GB ``
                 -MemoryMinimumBytes 1GB -MemoryMaximumBytes 3GB
          Set-VMMemory -VMName $ClientName -Buffer 10
        Static 4 GB was only for Setup.
-    7. Move the adapter to '$SwitchName', static 192.168.100.3/24, no gateway.
-    8. Checkpoint "baseline", then run the 0.1e gate table, then
-       checkpoint "pre-service".
+    9. Move the adapter to '$SwitchName', static 192.168.100.3/24, no gateway.
+   10. Checkpoint "baseline", then "pre-service" before T5.4.
+       The 0.1e gate table was for the trimmed image and no longer applies:
+       stock Windows needs no proof that it is a sound test bed.
 
   ENGINE VM  ($EngineName)
     1. Install Debian. DESELECT EVERYTHING in tasksel -- no desktop.

@@ -243,10 +243,18 @@ the lab machine.
 
 ## Lab provisioning — `build_client_image.ps1`
 
+> **Not used by the Phase 5 lab any more.** The media this produces installs
+> Windows and then loops OOBE forever — the completion flag is never written, and
+> both Windows Hello enrolment screens fail. The client VM is built from the
+> **stock** retail ISO instead. `testing.md` section 0.1e has the full account
+> and what would change the decision. Kept, and documented, because the script
+> works as designed and the keep-list is worth having; it is the *result* that is
+> unusable. `setup_lab_vms.ps1` defaults to stock media accordingly.
+
 The odd one out in this file: PowerShell, run on the **host**, and it builds no
-part of the system. It produces the trimmed Windows 11 install media the Phase 5
-client VM is installed from. Rationale and the keep/remove decisions live in
-`testing.md` section 0.1e; this is the flag reference.
+part of the system. It produces trimmed Windows 11 install media. Rationale and
+the keep/remove decisions live in `testing.md` section 0.1e; this is the flag
+reference.
 
 ```powershell
 # Elevated Windows PowerShell 5.1, from the repo root

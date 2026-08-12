@@ -1233,3 +1233,39 @@ the file being corrupted, but it is still one shared resource.
 or a headless enforcement mode would be substantial work whose only consumer is
 a test harness, and it would mean the thing under test is no longer the thing
 that ships. Use real machines, or VMs, for the enforcement half.
+
+### D9. The client VM runs stock Windows, not trimmed media
+
+`scripts/build_client_image.ps1` produces a debloated Win11 24H2 ISO, and the
+client VM was meant to be installed from it. It was tried on **2026-08-12** and
+abandoned the same night.
+
+**How it fails.** Windows installs cleanly, OOBE runs, a desktop appears — and
+then the machine reboots into "choose country or region" and does so forever.
+Completion is recorded under `HKLM\SYSTEM\Setup\Status\ChildCompletion`, and
+something the trim removes stops that write. Alongside it, both Windows Hello
+enrolment screens fail outright: `OOBEMSAHELLO` on the Microsoft-account path,
+`OOBELOCALHELLO` on the local-account path, each needing a manual Skip.
+
+**The unattend file is not the culprit.** On the second OOBE pass, entering
+`lab` is refused with "type a different user name" — the account
+`autounattend.xml` asked for exists already. The trim is what breaks.
+
+**Why not repaired.** Two reasons. The justification for trimming was disk
+(`testing.md` 0.1e), and disk stopped being the constraint — `K:` has ~625 GB
+free, where the plan was written when ~70 GB was tight. And an image needing
+registry surgery to complete its own installation is a poor foundation for a
+phase that exists to establish trust in what the machine does: every later
+oddity would carry "is this our bug or the debloat?", which is precisely the
+question 0.1e's gate table was invented to answer and could no longer answer
+credibly.
+
+**What it costs.** Stock idles ~1 GB higher (~2.0–2.5 GB against ~1.2–1.5 GB),
+which Dynamic Memory reclaims, and Defender comes back — a live false-positive
+risk for the overlay's Task Manager policy and for Phase 8's PyInstaller exes.
+Exclusions handle that, and a machine with Defender running is closer to the
+one the agent actually ships to.
+
+**What would change this**: needing several client VMs on a genuinely small
+disk. The fix then is OOBE completion inside the script — start at the Appx
+keep-list, not the service list — not a registry workaround downstream.

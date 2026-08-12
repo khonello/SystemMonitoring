@@ -266,8 +266,10 @@ Choose **Pro** at the edition prompt: Home would run the agent fine, but Pro
 matches a managed lab machine and carries `gpedit.msc`, which is what T4.5 needs
 to reproduce the group-policy conflict C10 describes.
 
-That ISO is the *source*. The media the VM is actually installed from is the
-trimmed build produced in section 0.1e — everything below is unchanged either way.
+**Install from that ISO directly.** Section 0.1e records an attempt to install
+from trimmed media instead; it failed, and stock is what works. Stock media
+carries no `autounattend.xml`, so OOBE asks you things the trimmed image
+answered automatically — see step 1 below.
 
 **Activation is not needed for any of this.** Left unactivated, Windows 11 runs
 indefinitely with cosmetic limits — a desktop watermark and locked
@@ -293,24 +295,85 @@ the WSL switch is created and reconfigured by WSL rather than by you. The
 adapter can be changed any time in *VM Settings → Network Adapter*, which is
 what step 8 does.
 
+**Turn off automatic checkpoints.** Windows 11 Hyper-V enables them by default
+on new VMs, so the machine starts running on a differencing disk the first time
+it boots, which collides with the deliberate `baseline` and `pre-service`
+checkpoints below. `scripts/setup_lab_vms.ps1` sets
+`-AutomaticCheckpointsEnabled $false`; do it by hand if you build a VM any other
+way. Clear a stray one with `Get-VMSnapshot -VMName LabClient | Remove-VMSnapshot`
+— **never** by deleting the `.avhdx`, which breaks the disk chain and costs you
+the VM.
+
+#### Getting it to boot from the DVD at all
+
+This cost an evening on 2026-08-12, and it will cost another on the Engine VM if
+forgotten. Three things compound:
+
+- **The media gives you about five seconds.** "Press any key to boot from CD or
+  DVD" is baked into the Windows UEFI boot image, not added by Hyper-V, and it
+  appears on every boot — including with a completely blank disk.
+- **VMConnect renders nothing until it attaches.** Start the VM and *then* open
+  its window, and the window opens mid-boot, after the prompt has expired. What
+  you are looking at is already history, so every key you press does nothing.
+  It reads exactly like a dead keyboard, and that is the trap.
+- **A missed prompt falls through to PXE**, which has no boot server on the
+  Default Switch and burns 30+ seconds before failing on to the empty disk.
+
+**The order that works:**
+
+1. VM off — `Stop-VM -Name LabClient -TurnOff -Force`
+2. Drop PXE from the boot order, so a missed prompt costs seconds, not a minute:
+   ```powershell
+   $dvd = Get-VMDvdDrive -VMName LabClient
+   $hd  = Get-VMHardDiskDrive -VMName LabClient
+   Set-VMFirmware -VMName LabClient -BootOrder $dvd, $hd
+   ```
+3. **Open the console while the VM is still off** — double-click it in Hyper-V
+   Manager. Click inside the black area so the window has focus.
+4. Start it *from inside that window*: **Action → Start**.
+5. Tap the spacebar continuously from the moment you click Start. Do not wait to
+   see the prompt.
+
+**Three things that look like the cause and are not.** *View → Enhanced Session*
+being greyed out is normal — it tunnels input over RDP into the guest, so with
+no guest OS installed it is unavailable rather than disabled, and it is not what
+is eating your keystrokes. `Get-VM` reporting `Running` with a healthy uptime
+while the screen ignores you is the symptom above, not a hung VM. And the boot
+order is worth confirming once with
+`Get-VMFirmware -VMName LabClient | Select-Object -ExpandProperty BootOrder`,
+but if the DVD is already first, it is not your problem.
+
 **Leave the network connected until provisioning is finished.** Windows 11 24H2
 pushes a Microsoft account and an internet connection through OOBE, and the
 offline workarounds are a moving target — `oobe\BypassNRO.cmd` was removed in
-recent builds, leaving `Shift+F10` → `start ms-cxh:localonly` as the current
+recent builds, leaving `Shift+F10` → `start ms-cxh:localonly` as the fallback
 local-account route. Fighting that buys nothing here. Install with the network
 up, then take it down for good once the machine is provisioned.
 
 **Provisioning, in order:**
 
-1. Install Windows, complete OOBE.
+1. Install Windows. At the edition prompt choose **Windows 11 Pro**, and skip
+   the product key — activation is not needed (above). Then complete OOBE by
+   hand, since stock media has no unattend file. The local-account route on Pro
+   is **"Set up for work or school" → Sign-in options → Domain join instead**,
+   which despite the wording joins nothing; it is Microsoft's remaining
+   sanctioned path to a local account. Use `lab` / `lab`. `Shift+F10` →
+   `start ms-cxh:localonly` is the fallback if that path is missing.
 2. Install **Python 3.10+** (the project pins `requires-python = ">=3.10"`).
    Tick *Add python.exe to PATH*.
 3. Copy the repository in — Enhanced Session drive redirection is easiest.
+   **Copy the working directory; do not `git clone`.** `certs/` is gitignored
+   (section 0.4), and a clone leaves this machine on plaintext while the Engine
+   uses TLS.
 4. `pip install -r requirements.txt -r requirements-client.txt`
    (the VM runs only the Client, so the Admin file is not needed).
 5. `pip install -e .` — without it `from common.protocol import ...` will not
    resolve.
-6. `certs/` comes with the repository — nothing to generate or copy separately.
+6. **Defender is live on stock media**, unlike the trimmed image. It is a
+   false-positive risk for the overlay (which disables Task Manager) and for
+   Phase 8's PyInstaller-frozen exes. Add exclusions when it first bites rather
+   than disabling it blind — a machine with Defender off is not the machine the
+   agent ships to.
 7. `python -m client --check` — should resolve an id, report three MISSING
    bundles, and say `agent running False`.
 8. **Move the adapter to the `LabMonitor` switch** and set a static
@@ -323,12 +386,51 @@ Take a second checkpoint named **"pre-service"** immediately before T5.4's
 `install_service`, and revert to it after each attempt. That is the whole reason
 the VM is worth its two hours.
 
-### 0.1e The client VM's image — tiny11, not tiny11 Core
+### 0.1e The client VM's image — trimmed media was tried and abandoned
 
-**Decision: build the client VM's media with `scripts/build_client_image.ps1`
-from our own `Win11_24H2_English_x64.iso`. `tiny11maker.ps1` is the fallback if
-that script gives trouble. Not `tiny11Coremaker.ps1`, and not a pre-built tiny11
-ISO downloaded from anywhere.**
+**Verdict: install from the stock retail ISO. The trimmed image does not
+work.** `scripts/build_client_image.ps1` still builds and everything below still
+describes what it does and why, kept as record rather than as instruction.
+`scripts/setup_lab_vms.ps1` now defaults `-ClientIso` to the stock media.
+
+**What went wrong**, 2026-08-12, with `K:\win11-labclient.iso`:
+
+- **Windows installs, and then OOBE never finishes.** The desktop appears, the
+  machine reboots itself, and it comes back to "choose country or region" —
+  forever. Windows records OOBE completion under
+  `HKLM\SYSTEM\Setup\Status\ChildCompletion`, and something the trim removed
+  stops that from being written.
+- **Both Windows Hello enrolment screens fail.** `OOBEMSAHELLO` on the
+  Microsoft-account path, `OOBELOCALHELLO` on the local-account path, each
+  showing "Something went wrong" with Skip and Try again. The components are
+  gone, so Try again fails identically. Both must be skipped by hand.
+- **The `autounattend.xml` account is created correctly.** On the second OOBE
+  pass, entering `lab` is refused with "type a different user name" — proof the
+  account already exists. The unattend file is not at fault; the trim is.
+
+**The escape, recorded but untested.** From a `Shift+F10` prompt, setting
+`HKLM\SYSTEM\Setup\Status\ChildCompletion\setup.exe` to `3` and
+`HKLM\SYSTEM\Setup\OOBEInProgress` to `0`, then rebooting, should mark setup
+complete and break the loop. Not tried here — the image was abandoned instead.
+
+**Why abandoned rather than repaired.** The justification for trimming was disk
+(table below), and disk stopped being the constraint: `K:` has ~625 GB free. An
+image needing registry surgery to finish installing is a poor foundation for a
+phase whose entire purpose is trusting what the machine does — every later
+oddity would carry the question "is this our bug or the debloat?". Stock costs
+~1 GB more idle RAM, which Dynamic Memory absorbs, and brings Defender back,
+which exclusions handle.
+
+**What would change this**: needing several client VMs on a genuinely small
+disk. Then fix OOBE completion in the script rather than working around it —
+the Appx keep-list is where to look, not the service list.
+
+**The gate table further down no longer gates anything.** It existed to prove a
+modified Windows was a sound test bed. Stock Windows needs no such proof.
+
+---
+
+Everything from here is the record of the attempt.
 
 **Why debloat at all.** Not for RAM. Dynamic Memory (section 0.1) already returns
 what the guest is not touching, and the gap it leaves is small:
@@ -678,8 +780,18 @@ revert and a re-run rather than by argument.
 
 The small one. Well under an hour, and almost none of it is waiting.
 
-**Media**: a **Debian netinst** for amd64 (~630 MB) from `debian.org`. Section
-0.1 records why this rather than Alpine or Ubuntu Server.
+**Media**: a **Debian netinst** for amd64 from `debian.org` — currently
+`debian-13.x.x-amd64-netinst.iso`, about 755 MB. Section 0.1 records why this
+rather than Alpine or Ubuntu Server. Older figures of ~630 MB were bookworm-era;
+netinst images have carried non-free firmware by default since Debian 12, so a
+larger file is expected rather than a sign of the wrong download.
+
+**Take Debian 12 or 13, never 11.** Bullseye ships Python 3.9.2, under this
+project's `requires-python = ">=3.10"`. Bookworm is 3.11.2, trixie 3.13.5.
+Debian 11 was downloaded first here and thrown away for exactly this.
+
+**The boot prompt catches this VM too** — see the boot subsection in section
+0.1d. Open the console before starting the VM, not after.
 
 **Hyper-V settings:**
 
@@ -765,37 +877,38 @@ Two more things that only matter if something goes wrong:
 
 ### 0.5 Part 0 as a checklist
 
-**Already done**: the trimmed ISO (`K:\win11-labclient.iso`), the Windows ADK,
-and `certs/`. **One download outstanding**: the Debian netinst (~630 MB), for
-the Engine VM. Everything below is what remains.
+**Already done**: `certs/`, the Windows ADK, both ISOs on `K:`
+(`Win11_24H2_English_x64.iso` and `debian-netinst.iso`), and
+`scripts/setup_lab_vms.ps1` run once — so the storage layout, the switch, the
+host address and both VMs already exist. Everything below is what remains.
+
+**Every VM boot: open the console *before* starting the VM.** Otherwise the
+window attaches after the five-second "press any key" prompt has expired, and
+the keyboard appears dead. Section 0.1d.
 
 **Host — needs an elevated PowerShell**, or the Hyper-V cmdlets refuse
 
-- [ ] Hyper-V Settings → point both the VHD and the VM path at `K:` — mandatory, not tidiness: `C:` has under 5 GB free
-- [ ] Virtual Switch Manager → **New → Internal**, named `LabMonitor`
-- [ ] Host adapter `vEthernet (LabMonitor)` → static `192.168.100.1/24`
+- [x] Hyper-V Settings → both the VHD and the VM path at `K:` — mandatory, not tidiness: `C:` has under 5 GB free
+- [x] Virtual Switch Manager → **New → Internal**, named `LabMonitor`
+- [x] Host adapter `vEthernet (LabMonitor)` → static `192.168.100.1/24`
 
 **Client VM** — section 0.1d
 
-- [ ] Create: Gen 2, 2 vCPU, 64 GB dynamic VHDX, **static 4 GB** for install, Default Switch
-- [ ] *Settings → Security* → **enable TPM**, before first boot
-- [ ] *Settings* → **Automatic Stop Action → Shut down** — otherwise Hyper-V holds a `.bin` file the size of assigned RAM the whole time the VM runs
-- [ ] Install from `K:\win11-labclient.iso`, edition **Pro**, network up through OOBE
-- [ ] Python 3.10+ with *Add to PATH*, then copy the repository in
+- [x] Create: Gen 2, 2 vCPU, 64 GB dynamic VHDX, **static 4 GB** for install, Default Switch, TPM on, automatic checkpoints off
+- [ ] Install from `K:\Win11_24H2_English_x64.iso` — **stock, not the trimmed image** (0.1e). Edition **Pro**, skip the product key, network up through OOBE
+- [ ] Make the local account by hand — stock media has no unattend file: *Set up for work or school → Sign-in options → Domain join instead*, then `lab` / `lab`
+- [ ] Python 3.10+ with *Add to PATH*, then copy the repository in — **copy, do not `git clone`** (0.4)
 - [ ] `pip install -r requirements.txt -r requirements-client.txt`, then `pip install -e .`
 - [ ] `python -m client --check` → id resolves, three MISSING bundles, `agent running False`
 - [ ] Switch to Dynamic Memory: **Startup 2 GB, Minimum 1 GB, Maximum 3 GB**, buffer 5–10%
 - [ ] Move the adapter to `LabMonitor`, static `192.168.100.3/24`, no gateway
-- [ ] Checkpoint **"baseline"**
-- [ ] Run the section 0.1e gate table — 8 checks
-- [ ] Checkpoint **"pre-service"**
+- [ ] Checkpoint **"baseline"**, and **"pre-service"** before T5.4
+- [ ] Defender is live on stock media — add exclusions when it first bites (0.1d)
 
 **Engine VM** — section 0.1f
 
-- [ ] Create: Gen 2, 1 vCPU, **512 MB static**, 8 GB dynamic VHDX, Default Switch
-- [ ] *Settings → Security* → Secure Boot template **Microsoft UEFI Certificate Authority**, or off — the *Microsoft Windows* default will not boot Debian
-- [ ] *Settings* → **Automatic Stop Action → Shut down**
-- [ ] Install Debian netinst, **deselect everything in tasksel** — no desktop
+- [x] Create: Gen 2, 1 vCPU, **512 MB static**, 8 GB dynamic VHDX, Default Switch, Secure Boot template **Microsoft UEFI Certificate Authority** — the *Microsoft Windows* default will not boot Debian
+- [ ] Install Debian **12 or 13, never 11** (11 ships Python 3.9, under the 3.10 floor), **deselect everything in tasksel** — no desktop
 - [ ] `sudo apt install python3`
 - [ ] `python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`
 - [ ] Copy the repository in — **copy, do not `git clone`**; `certs/` is gitignored (0.4). Nothing to `pip install`
