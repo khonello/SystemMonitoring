@@ -35,26 +35,33 @@
         (testing.md 0.1d step 8, 0.1f step 6).
       - Anything to the guests. No OS, no Python, no repository.
 
+    NOTHING HERE IS TIED TO ONE MACHINE. This lab is built on a dev box and
+    rebuilt on the presentation machine, which has a different disk layout, so
+    the drive is discovered rather than assumed and the media is found by
+    pattern rather than by path. Every parameter can still be passed explicitly.
+
 .PARAMETER ClientIso
-    Windows 11 media. Defaults to the STOCK retail ISO, deliberately.
+    Windows 11 media. Found automatically if omitted: Win11*.iso on the lab
+    drive, in its \ISO or \Disc folders, or in Downloads.
 
-    The trimmed image from scripts/build_client_image.ps1 was tried first and
-    abandoned: it installs, but OOBE never records completion, so the machine
-    loops back to "choose country or region" forever. Both Windows Hello
-    enrolment screens also fail (OOBEMSAHELLO, OOBELOCALHELLO) and must be
-    skipped by hand. The autounattend account is created correctly, which is
-    how you can tell the trim -- not the unattend -- is what broke.
-
-    The trim's stated win was disk (testing.md 0.1e), and disk stopped being
-    the constraint: K: has ~625 GB free. Pass -ClientIso explicitly if you ever
-    want to retry the trimmed media.
+    Use STOCK retail media. The trimmed image from build_client_image.ps1 was
+    tried and abandoned -- it installs, but OOBE never records completion, so
+    the machine loops back to "choose country or region" forever, and both
+    Windows Hello enrolment screens fail (OOBEMSAHELLO, OOBELOCALHELLO). The
+    autounattend account is created correctly, which is how you can tell the
+    trim rather than the unattend is what broke. testing.md 0.1e, issues.md D9.
 
 .PARAMETER EngineIso
-    Debian netinst. If it is not there yet, the Engine VM is skipped with a
-    notice and the rest still runs -- re-run once the download finishes.
+    Debian netinst, found automatically if omitted. **Debian 12 or 13 only** --
+    11 ships Python 3.9.2, below this project's floor of 3.10, and is refused
+    here rather than three hours later. If no netinst is found the Engine VM is
+    skipped with a notice and the rest still runs; re-run once it downloads.
 
 .PARAMETER LabRoot
-    Where VMs and VHDXs live. Must not be C:, which has under 5 GB free.
+    Where VMs and VHDXs live. Discovered if omitted: the fixed drive with the
+    most free space and at least 90 GB, preferring a non-system drive. Hyper-V's
+    own default is on the system drive and is a common way to run a machine out
+    of room.
 
 .PARAMETER DryRun
     Print every action without taking it. Run this first.
@@ -62,6 +69,7 @@
 .EXAMPLE
     .\scripts\setup_lab_vms.ps1 -DryRun
     .\scripts\setup_lab_vms.ps1
+    .\scripts\setup_lab_vms.ps1 -LabRoot 'D:\LabMonitor'
 
 .NOTES
     Requires an ELEVATED PowerShell. Hyper-V cmdlets fail with a bare
@@ -70,9 +78,9 @@
 
 [CmdletBinding()]
 param(
-    [string] $ClientIso  = 'K:\Win11_24H2_English_x64.iso',
-    [string] $EngineIso  = 'K:\debian-netinst.iso',
-    [string] $LabRoot    = 'K:\LabMonitor',
+    [string] $ClientIso,
+    [string] $EngineIso,
+    [string] $LabRoot,
     [string] $ClientName = 'LabClient',
     [string] $EngineName = 'LabEngine',
     [string] $SwitchName = 'LabMonitor',
@@ -90,6 +98,51 @@ function Skip   { param($m) Write-Host "  [have] $m" -ForegroundColor DarkGray }
 function Warn   { param($m) Write-Host "  [warn] $m" -ForegroundColor Yellow }
 function Doing  { param($m) if ($DryRun) { Write-Host "  [dry]  $m" -ForegroundColor Magenta } else { Write-Host "  [do]   $m" } }
 
+# Nothing below hardcodes a drive letter. This lab is built on one machine and
+# rebuilt on another (the presentation machine), and the second one has a
+# different disk layout -- so the drive is discovered, not assumed.
+function Resolve-LabDrive {
+    <# Largest fixed drive with room for both VMs, preferring a non-system one. #>
+    $need = 90    # client VHDX can grow to 64 GB, plus media and checkpoints
+    $candidates = Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 3' |
+        ForEach-Object {
+            [pscustomobject]@{
+                Letter   = $_.DeviceID
+                FreeGB   = [math]::Round($_.FreeSpace / 1GB, 1)
+                IsSystem = ($_.DeviceID -eq $env:SystemDrive)
+            }
+        } | Where-Object FreeGB -ge $need | Sort-Object IsSystem, @{E='FreeGB';D=$true}
+
+    if (-not $candidates) {
+        $all = Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 3' |
+               ForEach-Object { '{0} {1:N1} GB free' -f $_.DeviceID, ($_.FreeSpace/1GB) }
+        throw "No fixed drive has $need GB free. Found: $($all -join '; '). Pass -LabRoot explicitly if you know better."
+    }
+    $candidates[0]
+}
+
+function Find-LabIso {
+    <# Look for media by pattern, in the obvious places, before giving up. #>
+    param([string[]] $Patterns, [string] $LabDriveLetter, [string] $What)
+
+    $searchDirs = @(
+        "$LabDriveLetter\",
+        (Join-Path $LabDriveLetter '\ISO'),
+        (Join-Path $LabDriveLetter '\Disc'),
+        (Join-Path $env:USERPROFILE 'Downloads'),
+        (Split-Path $PSScriptRoot -Parent)
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+
+    foreach ($dir in $searchDirs) {
+        foreach ($pat in $Patterns) {
+            $hit = Get-ChildItem -Path $dir -Filter $pat -File -ErrorAction SilentlyContinue |
+                   Sort-Object Length -Descending | Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+        }
+    }
+    return $null
+}
+
 # --- preconditions ----------------------------------------------------------
 
 Step 'Checking preconditions'
@@ -101,28 +154,67 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 Ok 'running elevated'
 
 if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
-    throw 'The Hyper-V PowerShell module is not present. Enable Hyper-V in Windows Features first.'
+    throw 'The Hyper-V PowerShell module is not present. Enable Hyper-V in Windows Features first, then reboot.'
 }
 Ok 'Hyper-V module present'
 
-$labDrive = (Split-Path -Qualifier $LabRoot)
-if ($labDrive -eq 'C:') {
-    throw "LabRoot is on C:, which has under 5 GB free. Pass -LabRoot on another drive."
+if ($LabRoot) {
+    $labDrive = Split-Path -Qualifier $LabRoot
+    if (-not (Test-Path "$labDrive\")) { throw "Drive $labDrive does not exist." }
+    $free = [math]::Round((Get-PSDrive -Name $labDrive.TrimEnd(':')).Free / 1GB, 1)
+} else {
+    $chosen  = Resolve-LabDrive
+    $labDrive = $chosen.Letter
+    $free     = $chosen.FreeGB
+    $LabRoot  = Join-Path $labDrive 'LabMonitor'
+    Say "no -LabRoot given; chose $labDrive automatically"
 }
-$free = (Get-PSDrive -Name $labDrive.TrimEnd(':')).Free / 1GB
-Ok ("{0} has {1:N1} GB free" -f $labDrive, $free)
+Ok ("lab root $LabRoot  ({0} has {1:N1} GB free)" -f $labDrive, $free)
 if ($free -lt 90) {
     Warn 'Under 90 GB free. The client VHDX alone can grow to 64 GB.'
 }
+if ($labDrive -eq $env:SystemDrive) {
+    Warn "This is the system drive. Fine if the space is genuinely there -- Hyper-V's own default lives here and is often what runs a machine out of room."
+}
 
-if (-not (Test-Path $ClientIso)) { throw "Client ISO not found: $ClientIso" }
+if (-not $ClientIso) {
+    $ClientIso = Find-LabIso -Patterns @('Win11*.iso','*Win11*x64*.iso','*windows*11*.iso') `
+                             -LabDriveLetter $labDrive -What 'Windows 11'
+}
+if (-not $ClientIso -or -not (Test-Path $ClientIso)) {
+    throw @"
+No Windows 11 media found. Searched $labDrive\, $labDrive\ISO, $labDrive\Disc and Downloads.
+
+Get a retail Win11 24H2 x64 ISO and either drop it on $labDrive\ or pass
+-ClientIso. Use STOCK media -- testing.md 0.1e records why the trimmed image
+from build_client_image.ps1 is not used.
+"@
+}
 Ok "client media: $ClientIso"
 
-$haveEngineIso = Test-Path $EngineIso
+if (-not $EngineIso) {
+    $EngineIso = Find-LabIso -Patterns @('debian-1[23]*netinst*.iso','debian*netinst*.iso') `
+                             -LabDriveLetter $labDrive -What 'Debian netinst'
+}
+$haveEngineIso = $EngineIso -and (Test-Path $EngineIso)
 if ($haveEngineIso) {
+    # Bullseye ships Python 3.9.2, under this project's requires-python = ">=3.10".
+    # Debian 11 was downloaded first during the first build-out and thrown away
+    # for exactly this, after the ISO was already on disk. Catch it here instead.
+    if ((Split-Path $EngineIso -Leaf) -match 'debian-11') {
+        throw @"
+$EngineIso is Debian 11 (bullseye), which ships Python 3.9.2 -- below this
+project's floor of 3.10 (pyproject.toml requires-python).
+
+Download a Debian 12 or 13 netinst instead:
+  https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/
+Roughly 755 MB for trixie; netinst images have carried non-free firmware by
+default since Debian 12, so a file larger than the old ~630 MB is expected.
+"@
+    }
     Ok "engine media: $EngineIso"
 } else {
-    Warn "engine media not found at $EngineIso -- the Engine VM will be skipped."
+    Warn "no Debian netinst found -- the Engine VM will be skipped."
     Warn 'Download the Debian netinst (amd64, ~630 MB) from debian.org, then re-run this script.'
 }
 
@@ -187,6 +279,39 @@ if ($DryRun -and -not $sw) {
             }
             if (-not $adapter) { throw "Adapter '$alias' never appeared after creating the switch." }
             New-NetIPAddress -InterfaceAlias $alias -IPAddress $HostIp -PrefixLength $Prefix | Out-Null
+        }
+    }
+}
+
+# Windows classifies a brand-new Internal switch as a PUBLIC network and enables
+# no inbound ICMP echo rule, so `ping 192.168.100.1` from a guest times out on a
+# switch that is working perfectly. That reads as a broken lab and is not one.
+# Nothing real depends on ICMP -- the client dials the Engine over TCP and the
+# host only ever makes outbound connections -- but ping is the first thing
+# anyone reaches for, so it should tell the truth.
+Step "2b. Host firewall on '$alias'"
+
+if ($DryRun -and -not $sw) {
+    Doing "set '$alias' to Private and allow inbound ICMPv4 echo"
+} else {
+    $profileNow = Get-NetConnectionProfile -InterfaceAlias $alias -ErrorAction SilentlyContinue
+    if ($profileNow -and $profileNow.NetworkCategory -eq 'Private') {
+        Skip "'$alias' already Private"
+    } elseif ($profileNow) {
+        Doing "set '$alias' from $($profileNow.NetworkCategory) to Private"
+        if (-not $DryRun) {
+            Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private
+        }
+    }
+
+    $ruleName = 'LabMonitor ICMPv4 in'
+    if (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue) {
+        Skip "firewall rule '$ruleName' exists"
+    } else {
+        Doing "allow inbound ICMPv4 echo on '$alias'"
+        if (-not $DryRun) {
+            New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol ICMPv4 `
+                -IcmpType 8 -Action Allow -Profile Any -InterfaceAlias $alias | Out-Null
         }
     }
 }

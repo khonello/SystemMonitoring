@@ -875,48 +875,36 @@ Two more things that only matter if something goes wrong:
       returns `TcpTestSucceeded : True`
 - [ ] **T0.2** `certs/` present on all three, same files
 
-### 0.5 Part 0 as a checklist
+### 0.5 The runbook, and the four scripts
 
-**Already done**: `certs/`, the Windows ADK, both ISOs on `K:`
-(`Win11_24H2_English_x64.iso` and `debian-netinst.iso`), and
-`scripts/setup_lab_vms.ps1` run once — so the storage layout, the switch, the
-host address and both VMs already exist. Everything below is what remains.
+**[`LAB-SETUP.md`](LAB-SETUP.md) is the procedure** — ten numbered steps that
+build both VMs from nothing on any Windows 11 Pro machine, plus a symptom-first
+pitfalls table. Everything above in Part 0 is the *reasoning*; that page is what
+you follow with your hands.
 
-**Every VM boot: open the console *before* starting the VM.** Otherwise the
-window attaches after the five-second "press any key" prompt has expired, and
-the keyboard appears dead. Section 0.1d.
+It is deliberately machine-agnostic. The lab is built once on a dev box and
+again on the presentation machine, which has a different disk layout, so no
+drive letter appears in any script: `setup_lab_vms.ps1` picks the fixed drive
+with the most free space and finds both ISOs by pattern.
 
-**Host — needs an elevated PowerShell**, or the Hyper-V cmdlets refuse
+| Script | Runs on | When |
+|---|---|---|
+| `scripts/setup_lab_vms.ps1` | host | once, before anything — storage, switch, host address and firewall, both VMs |
+| `scripts/lab_client_setup.ps1` | inside LabClient | after Windows and Python — venv, packages, Defender exclusions, optional trim, `--check`, then `-SetNetwork` last |
+| `scripts/lab_engine_setup.sh` | inside LabEngine | after Debian — `python3`, the `sqlite3` gate, the repo, the static address, `--check` |
+| `scripts/lab_host_finalize.ps1` | host | per VM, with the VM off — Dynamic Memory, checkpoint policy, the `LabMonitor` replug, the `baseline` checkpoint |
 
-- [x] Hyper-V Settings → both the VHD and the VM path at `K:` — mandatory, not tidiness: `C:` has under 5 GB free
-- [x] Virtual Switch Manager → **New → Internal**, named `LabMonitor`
-- [x] Host adapter `vEthernet (LabMonitor)` → static `192.168.100.1/24`
+All four are idempotent and take `-DryRun` (`DRY_RUN=1` for the shell one).
+Re-running after fixing one thing is the intended way to use them, not a
+recovery path.
 
-**Client VM** — section 0.1d
-
-- [x] Create: Gen 2, 2 vCPU, 64 GB dynamic VHDX, **static 4 GB** for install, Default Switch, TPM on, automatic checkpoints off
-- [ ] Install from `K:\Win11_24H2_English_x64.iso` — **stock, not the trimmed image** (0.1e). Edition **Pro**, skip the product key, network up through OOBE
-- [ ] Make the local account by hand — stock media has no unattend file: *Set up for work or school → Sign-in options → Domain join instead*, then `lab` / `lab`
-- [ ] Python 3.10+ with *Add to PATH*, then copy the repository in — **copy, do not `git clone`** (0.4)
-- [ ] `pip install -r requirements.txt -r requirements-client.txt`, then `pip install -e .`
-- [ ] `python -m client --check` → id resolves, three MISSING bundles, `agent running False`
-- [ ] Switch to Dynamic Memory: **Startup 2 GB, Minimum 1 GB, Maximum 3 GB**, buffer 5–10%
-- [ ] Move the adapter to `LabMonitor`, static `192.168.100.3/24`, no gateway
-- [ ] Checkpoint **"baseline"**, and **"pre-service"** before T5.4
-- [ ] Defender is live on stock media — add exclusions when it first bites (0.1d)
-
-**Engine VM** — section 0.1f
-
-- [x] Create: Gen 2, 1 vCPU, **512 MB static**, 8 GB dynamic VHDX, Default Switch, Secure Boot template **Microsoft UEFI Certificate Authority** — the *Microsoft Windows* default will not boot Debian
-- [ ] Install Debian **12 or 13, never 11** (11 ships Python 3.9, under the 3.10 floor), **deselect everything in tasksel** — no desktop
-- [ ] `sudo apt install python3`
-- [ ] `python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`
-- [ ] Copy the repository in — **copy, do not `git clone`**; `certs/` is gitignored (0.4). Nothing to `pip install`
-- [ ] Move the adapter to `LabMonitor`, static `192.168.100.2/24`, no gateway
-- [ ] `python3 -m engine --check`
-- [ ] Checkpoint **"baseline"**
-
-**Gate** — T0.1 and T0.2 above. Part 1 does not start until both pass.
+**The scripts enforce what this document only explains.** Each refusal exists
+because the failure it prevents is silent or misleading: Store Python is refused
+because SYSTEM cannot reach it and the symptom surfaces at T5.4; long paths are
+checked because pip's error names a file, not a limit; a missing `certs/` is
+fatal because presence-based TLS would otherwise leave one machine on plaintext
+and the Engine's refusal does not name the cause; Debian 11 is rejected at the
+ISO rather than after an install, because its Python 3.9 is under the floor.
 
 ---
 

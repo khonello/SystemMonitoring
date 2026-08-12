@@ -340,6 +340,63 @@ and move to `LabMonitor` by hand later.
 
 ---
 
+## Lab provisioning — the three guest/host scripts
+
+`setup_lab_vms.ps1` creates the VMs; these three fill them in.
+[`LAB-SETUP.md`](LAB-SETUP.md) is the step-by-step order. All are idempotent,
+all take a dry-run switch, and **all need an elevated shell** (root, for the
+shell script).
+
+### `lab_client_setup.ps1` — inside LabClient
+
+```powershell
+.\scripts\lab_client_setup.ps1 [-RepoPath C:\SystemMonitoring] [-PythonExe C:\Python312\python.exe]
+                               [-Trim] [-SetNetwork] [-StaticIp 192.168.100.3] [-DryRun]
+```
+
+| Parameter | Default | What it is |
+|---|---|---|
+| `-RepoPath` | `C:\SystemMonitoring` | Short path on purpose — pip nests deeply |
+| `-PythonExe` | `C:\Python312\python.exe` | The **all-users** base interpreter the venv is built from |
+| `-Trim` | off | Disable services and remove Appx that no Phase 5 test touches |
+| `-SetNetwork` | off | Apply the static address. **Do this last** — it removes the VM's internet |
+| `-DryRun` | off | Print, change nothing |
+
+**It refuses rather than warns on four things**, each because the failure it
+prevents surfaces late and misleadingly: Store Python (per-user and sandboxed,
+so the T5.4 service running as SYSTEM cannot reach it), Python below 3.10, a
+missing `certs/` (presence-based TLS would leave this machine on plaintext), and
+a repo with no `pyproject.toml`. It also enables long-path support and clears
+the read-only attribute that files copied off `LabRepo.iso` carry.
+
+### `lab_engine_setup.sh` — inside LabEngine
+
+```sh
+sh /mnt/scripts/lab_engine_setup.sh          # DRY_RUN=1 to preview
+```
+
+POSIX `sh`, not bash — a netinst with everything deselected has `dash`. Installs
+`python3`, **fails hard if `sqlite3` is missing** (the Engine owns all
+persistence and it is the one stdlib module a stripped build can lack), copies
+the repo off `/dev/sr0`, writes the static address with **no gateway line**, and
+runs `engine --check`. Rejects Debian 11 by `VERSION_ID` — Python 3.9 is under
+the floor. Overrides: `REPO`, `STATIC_IP`, `NETMASK`.
+
+### `lab_host_finalize.ps1` — host, per VM, VM off
+
+```powershell
+.\scripts\lab_host_finalize.ps1 -VMName LabClient [-SkipCheckpoint] [-DryRun]
+```
+
+Dynamic Memory (2 / 1 / 3 GB — skipped for `LabEngine`, which stays static at
+512 MB since ballooning buys nothing there), automatic checkpoints off plus any
+stray one merged away, the `LabMonitor` replug, and the `baseline` checkpoint.
+Refuses to run on a VM that is not `Off`: memory mode cannot change while it
+runs, and a checkpoint of a running VM captures memory, which a baseline does
+not want.
+
+---
+
 ## `labmonitor.py` — dev-box dispatcher
 
 ```

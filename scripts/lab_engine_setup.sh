@@ -1,0 +1,178 @@
+#!/bin/sh
+# Provisions the Phase 5 Engine VM from the inside.
+#
+# Run this INSIDE LabEngine, as root, after Debian is installed.
+# testing.md sections 0.1f and 0.5.
+#
+# POSIX sh on purpose: a Debian netinst with everything deselected in tasksel
+# has dash as /bin/sh and no bash guarantees worth relying on.
+#
+# The Engine imports only the standard library, so there is nothing to pip
+# install and no venv. `apt install python3` is the entire dependency list.
+#
+# WHY THE sqlite3 CHECK IS A HARD FAILURE.
+# The Engine owns all persistence through SQLite (engine/database.py). It is
+# the one stdlib module a minimal or stripped Python build can be missing, and
+# everything else the Engine imports is unconditional. Debian carries it; the
+# check exists so that a smaller image chosen later cannot fail quietly at the
+# first write instead of loudly here.
+#
+# WHY DEBIAN 12 OR 13 AND NEVER 11.
+# Bullseye ships Python 3.9.2, under this project's requires-python = ">=3.10".
+# Debian 11 was downloaded first during this build-out and thrown away for it.
+
+set -eu
+
+REPO="${REPO:-/opt/SystemMonitoring}"
+STATIC_IP="${STATIC_IP:-192.168.100.2}"
+NETMASK="${NETMASK:-255.255.255.0}"
+HOST_IP="${HOST_IP:-192.168.100.1}"
+DRY_RUN="${DRY_RUN:-0}"
+
+say()   { printf '\n%s\n' "$*"; }
+ok()    { printf '  [ok]   %s\n' "$*"; }
+have()  { printf '  [have] %s\n' "$*"; }
+warn()  { printf '  [warn] %s\n' "$*"; }
+doing() { if [ "$DRY_RUN" = "1" ]; then printf '  [dry]  %s\n' "$*"; else printf '  [do]   %s\n' "$*"; fi; }
+run()   { if [ "$DRY_RUN" = "1" ]; then return 0; fi; "$@"; }
+
+# --- preconditions -----------------------------------------------------------
+
+say 'Checking preconditions'
+
+[ "$(id -u)" -eq 0 ] || { echo 'Not root. Re-run with sudo.' >&2; exit 1; }
+ok 'running as root'
+
+if [ -r /etc/os-release ]; then
+    . /etc/os-release
+    ok "guest is ${PRETTY_NAME:-unknown}"
+    case "${VERSION_ID:-}" in
+        11|11.*) echo 'Debian 11 ships Python 3.9, below this project floor of 3.10. Reinstall from a Debian 12 or 13 netinst.' >&2; exit 1 ;;
+    esac
+fi
+
+# --- python ------------------------------------------------------------------
+
+say '1. Python'
+
+if command -v python3 >/dev/null 2>&1; then
+    have "python3 present: $(python3 -V 2>&1)"
+else
+    doing 'apt install python3'
+    run apt-get update -qq
+    run apt-get install -y python3
+fi
+
+if [ "$DRY_RUN" != "1" ]; then
+    PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+    case "$PYVER" in
+        3.10|3.11|3.12|3.13|3.14) ok "python3 is $PYVER" ;;
+        *) echo "python3 is $PYVER, below the 3.10 floor (pyproject.toml requires-python)." >&2; exit 1 ;;
+    esac
+
+    if python3 -c 'import sqlite3; print("  [ok]   sqlite3", sqlite3.sqlite_version)'; then
+        :
+    else
+        echo 'python3 has no sqlite3 module. The Engine cannot persist anything without it. Reinstall from a Debian netinst rather than a stripped image.' >&2
+        exit 1
+    fi
+fi
+
+# --- repository --------------------------------------------------------------
+
+say '2. Repository'
+
+if [ -f "$REPO/pyproject.toml" ]; then
+    have "repository at $REPO"
+else
+    # LabRepo.iso, built on the host, is the least fiddly route in -- it needs
+    # no ssh, no shared folder and no network at all. Attach it on the host:
+    #   Set-VMDvdDrive -VMName LabEngine -Path K:\LabRepo.iso
+    doing "copy repository from /dev/sr0 to $REPO"
+    if [ "$DRY_RUN" != "1" ]; then
+        if [ ! -b /dev/sr0 ]; then
+            echo "No /dev/sr0. Attach LabRepo.iso to this VM's DVD drive on the host:" >&2
+            echo '  Set-VMDvdDrive -VMName LabEngine -Path <lab-drive>:\LabRepo.iso' >&2
+            exit 1
+        fi
+        mkdir -p /mnt/labrepo "$REPO"
+        mount -o ro /dev/sr0 /mnt/labrepo
+        cp -r /mnt/labrepo/. "$REPO"/
+        umount /mnt/labrepo
+        # Files off a CD arrive read-only.
+        chmod -R u+w "$REPO"
+    fi
+fi
+
+# certs/ is gitignored, so it reaches this machine only by copying rather than
+# cloning. TLS is presence-based: without it this VM would serve plaintext and
+# refuse the client, logging a refusal that does not name the cause.
+if [ "$DRY_RUN" != "1" ]; then
+    if [ -f "$REPO/certs/engine-cert.pem" ] && [ -f "$REPO/certs/engine-key.pem" ]; then
+        ok 'certs/ present (cert and key)'
+    else
+        echo "certs/ is missing or incomplete under $REPO. This came from a clone, not a copy. See testing.md 0.4." >&2
+        exit 1
+    fi
+fi
+
+# --- network -----------------------------------------------------------------
+
+say "3. Static address $STATIC_IP"
+
+IFACE=$(ip -o link show 2>/dev/null | awk -F': ' '$2 != "lo" {print $2; exit}')
+[ -n "$IFACE" ] || { echo 'No non-loopback interface found.' >&2; exit 1; }
+ok "interface $IFACE"
+
+if ip -4 addr show "$IFACE" 2>/dev/null | grep -q "$STATIC_IP"; then
+    have "$IFACE already has $STATIC_IP"
+else
+    doing "write $STATIC_IP into /etc/network/interfaces"
+    if [ "$DRY_RUN" != "1" ]; then
+        cp /etc/network/interfaces /etc/network/interfaces.bak
+        cat >> /etc/network/interfaces <<EOF
+
+# LabMonitor -- Phase 5 isolated switch (testing.md 0.1).
+# NO gateway line, deliberately: with no default route this guest reaches the
+# host and the client VM and nothing else, which is what keeps the stubbed
+# authentication (issues.md C1) off every real network by construction.
+auto $IFACE
+iface $IFACE inet static
+    address $STATIC_IP
+    netmask $NETMASK
+EOF
+        ifdown "$IFACE" 2>/dev/null || true
+        ifup "$IFACE" 2>/dev/null || true
+    fi
+fi
+
+# --- self-check --------------------------------------------------------------
+
+say '4. python3 -m engine --check'
+
+if [ "$DRY_RUN" != "1" ]; then
+    # Run from the repo root so `common/` resolves -- there is no editable
+    # install on this machine and none is needed.
+    ( cd "$REPO" && python3 -m engine --check )
+    printf '\n  Check the transport line says TLS with a certificate path.\n'
+    printf '  PLAINTEXT means the certificate is not where the Engine looks.\n'
+    printf '  Check the authentication line does NOT say BYPASSED -- that is\n'
+    printf '  DEV_BYPASS_AUTH set in this shell.\n'
+fi
+
+say 'Done. What is left:'
+
+cat <<EOF
+  1. Shut this VM down:  poweroff
+  2. On the HOST:  .\\scripts\\lab_host_finalize.ps1 -VMName LabEngine
+  3. Start it, and serve:
+       cd $REPO && ENGINE_LOG_LEVEL=DEBUG python3 -m engine
+     It binds 0.0.0.0, which on this VM means only the isolated switch.
+  4. Gate T0.1, from the CLIENT VM:
+       Test-NetConnection $STATIC_IP -Port 5000
+     TcpTestSucceeded : True. Part 1 does not start until it passes.
+
+  Ping to $HOST_IP failing is not a fault -- the host firewall drops ICMP by
+  default on a new Internal switch. setup_lab_vms.ps1 adds a rule for it.
+  Nothing real depends on ICMP; the gate above is TCP.
+EOF
