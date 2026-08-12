@@ -1067,6 +1067,47 @@ the declarations at build time — which would pull a toolchain into Phase 8
 packaging for one module, while every other Windows call in the client already
 goes through ctypes. ABI mode would be a wash.
 
+### C17. The Admin GUI looks like a prototype, not an operator tool
+
+**Raised 2026-08-12.** Layout dimensions read as distorted, and the whole
+window looks like scaffolding rather than an interface someone would run a lab
+from. This is a real defect for a project defended by demonstration: the Admin
+is the only component an audience sees for any length of time.
+
+Distinct from every other open item here in that it is **presentation quality,
+not correctness**. The Admin works — it registers, heartbeats, dispatches
+commands, receives telemetry, and its QML loads clean under `--check-qml`.
+
+**Two ways to fix it, and they are not close in cost.**
+
+- **Fix the QML.** Sizing, spacing, alignment and a coherent visual hierarchy
+  inside `admin/ui/`. Bounded, touches no architecture, and can be done
+  incrementally between Phase 5 test runs.
+- **Replace Qt with DearPyGui**, which was floated as an option. Costs are
+  concrete rather than theoretical, and worth stating before anyone commits:
+  - **qasync goes.** The Admin is single-threaded by design — asyncio runs on
+    top of Qt's event loop, so the GUI, the Engine socket and every background
+    task share one thread with no cross-thread marshalling anywhere. DearPyGui
+    owns its own render loop, so that integration has to be rebuilt, and the
+    README's rule that threads exist only for work that cannot signal readiness
+    comes back into question.
+  - **Two toolkits.** The client's dialog and overlay are QML specifically to
+    match the Administrator. Moving the Admin alone leaves PySide6 in the client
+    and DearPyGui in the Admin — the exact split CLAUDE.md forbids.
+  - **Phase 8 packaging** gains a second GUI stack to freeze and test.
+  - The overlay in particular is a full-screen composited window that re-asserts
+    topmost every 500 ms and disables Task Manager; it is not a candidate for
+    porting, so PySide6 stays in the project either way.
+
+**Recommendation: fix the QML.** The complaint is about spacing, proportion and
+polish, and none of that is a Qt limitation — it is unfinished layout work. A
+toolkit swap would trade a bounded styling problem for an architectural one,
+weeks before a defence.
+
+**What would change this**: wanting immediate-mode plotting or dense real-time
+dashboards that QML genuinely struggles with. Nothing in the current admin
+surface is that.
+
 ---
 
 ## D — Accepted limitations
