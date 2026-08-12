@@ -1108,6 +1108,63 @@ weeks before a defence.
 dashboards that QML genuinely struggles with. Nothing in the current admin
 surface is that.
 
+#### The fleet-view proposal, and one change to it
+
+Proposed 2026-08-12: a page showing a rectangle per connected client; selecting
+one re-orients the dashboard to that client; with nothing selected the dashboard
+shows everything across all clients.
+
+**The shape is right and the data model already supports it.** The Engine fans
+telemetry out to every admin (D5), so the Admin already receives every client's
+data — this is a presentation change, not a protocol or storage one. It also
+matches how someone actually thinks about a lab: *what machines do I have*, then
+*what is machine 3 doing*.
+
+**Make the tiles carry state, or they are a worse list.** Each should answer, at
+a glance: connected or not, seconds since last heartbeat, whether a lockout or
+pause is on screen right now, whether a script is running. All of that is state
+the Engine already holds. A tile showing only a hostname is decoration.
+
+That also happens to be the strongest thing in the demo — a tile visibly
+changing state the moment a lockout is applied is far more convincing than a log
+line, and it is worth designing the page around that moment.
+
+**The one change: don't make selection a hidden global mode.** A separate page
+plus a remembered selection means an operator can be looking at a dashboard and
+not realise it is filtered — and the failure that follows is dispatching a
+command believing the scope is one thing when it is another.
+
+Prefer a **persistent left rail** listing clients, dashboard to the right.
+Selection is then always visible as a highlighted row, "all clients" is just the
+unselected state, and there is no mode to lose track of. It is also less work
+than a separate page and a selection model that has to survive navigation.
+
+**Keep view scope and command scope separate.** Selecting a client should narrow
+what you *see*. It should not silently become the target of what you *send* —
+command targeting stays an explicit choice at dispatch. The Engine already
+treats it that way: every dispatch gets its own `command_id` even inside a
+broadcast.
+
+**Scale honestly.** Phase 6 talks about 10+ clients with a ceiling of 50. A grid
+of tiles reads well to roughly 30 and badly beyond it; a rail scales further
+because it is a list. Neither matters for the defence, where D8 limits the
+realistic demo to one enforcing client plus others reporting telemetry — so
+build for the demo and let the ceiling be a table later if it ever arrives.
+
+#### Sequencing: after the system is proven, before authentication
+
+Decided 2026-08-12, and it is the right order for a project defended by
+demonstration:
+
+1. **Prove Engine ↔ Admin ↔ Client end to end first.** That is Phase 5, and none
+   of this UI work starts until it passes. Restyling a system that has not been
+   shown to work is how you end up debugging both at once.
+2. **Then this.** Ahead of authentication (C1) deliberately: C1 gates a
+   *deployment*, and the Internal switch already contains it structurally for
+   the defence, while the Admin is the one component an audience looks at for
+   any length of time. The item that changes what the defence looks like
+   outranks the item that changes what a deployment would need.
+
 ---
 
 ## D — Accepted limitations
