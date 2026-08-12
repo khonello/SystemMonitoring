@@ -259,6 +259,8 @@ Step 'Done. What is left, in order:'
        through OOBE -- 24H2 fights offline installs.
     2. Python 3.10+, tick "Add python.exe to PATH".
     3. Copy the repository in (Enhanced Session drive redirection).
+       COPY, DO NOT git clone -- certs/ is gitignored and a clone leaves
+       this machine on plaintext while the Engine uses TLS (0.4).
     4. pip install -r requirements.txt -r requirements-client.txt
        pip install -e .
     5. python -m client --check
@@ -276,7 +278,8 @@ Step 'Done. What is left, in order:'
     1. Install Debian. DESELECT EVERYTHING in tasksel -- no desktop.
     2. sudo apt install python3
     3. python3 -c "import sqlite3; print(sqlite3.sqlite_version)"
-    4. Copy the repository in. certs/ comes with it; nothing to pip install.
+    4. Copy the repository in -- again, COPY, not git clone (certs/, 0.4).
+       Nothing to pip install; run from the repo root so common/ resolves.
     5. Static 192.168.100.2/24, no gateway, in /etc/network/interfaces.
     6. python3 -m engine --check
     7. Checkpoint "baseline".
