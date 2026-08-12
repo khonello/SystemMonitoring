@@ -259,6 +259,44 @@ Phase 5 — it costs nothing extra, it is just where the machines already are.
 Disconnecting the *virtual* adapter in the VM's settings is how T5.3's reconnect
 backoff gets tested — no real network to unplug.
 
+**The same isolation is why the code arrives on a disc.** A guest with no route
+out cannot clone, cannot mount a share and has nothing listening for `scp`, and
+Hyper-V offers no USB pass-through; copy-paste needs Enhanced Session, which
+needs RDP running inside a guest that either has no desktop (Debian) or has not
+finished OOBE yet (Windows). A DVD image is the one channel both guests read
+natively before any network or account exists, and it is read-only, so a guest
+cannot modify the source tree it was built from. `LAB-SETUP.md` step 4 is the
+procedure; the reasoning is below.
+
+**`LabRepo.iso` — what it is and what it costs to get wrong.** The repository is
+staged to a temporary directory (dropping `.venv`, `__pycache__` and
+`.pytest_cache`, all of which are host-specific and would be actively wrong on a
+guest) and imaged with `oscdimg` from the Windows ADK. Two flags carry meaning:
+`-u2` writes UDF, without which ISO 9660 truncates and upper-cases every name
+long enough to matter; `-lLABREPO` sets the volume label the disc is identified
+by inside the guest. Hidden files are skipped unless `-h` is passed, so **`.git`
+never reaches the disc** — which enforces the copy-don't-clone rule (§0.4)
+structurally rather than by discipline: what lands on each guest is a working
+copy with `certs/` in it, not a repository that could be pulled or re-cloned.
+
+The failure mode to respect is that **the disc is a snapshot and goes stale in
+silence**. On 2026-08-12 the image on disk predated three of the four lab
+scripts and contained none of them; the documented Engine command
+(`sh /mnt/scripts/lab_engine_setup.sh`) would have failed with "no such file"
+for a script sitting in the editor on the host. Re-cut the image after any
+change to the code or the scripts, and mount it on the host to confirm before
+attaching it — the stale-disc symptom points at the guest, which is the wrong
+place to look.
+
+Attaching is a **swap**, not an addition: each VM has one DVD drive, so
+`Set-VMDvdDrive` replaces whatever is loaded (`Add-VMDvdDrive` would add a
+second, which nothing here needs). For LabEngine that drive holds the Debian
+netinst until the install finishes, and the swap afterwards is mandatory rather
+than tidy — the VM boots DVD-first, so leaving the installer attached walks it
+back into the installer instead of the system just built. Windows sees the disc
+as `D:`; Debian has no automounter without a desktop and needs
+`mount -o ro /dev/sr0 /mnt` by hand.
+
 ### 0.1d Building the VM
 
 A retail **Win11 24H2 x64** ISO (~5.7 GB, multi-edition) is the right media.

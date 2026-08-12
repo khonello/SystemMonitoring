@@ -97,24 +97,92 @@ python -V               # 3.12.x
 
 ---
 
-## 4. Get the repository into the VM
+## 4. Get the repository into the VM — `LabRepo.iso`
 
-On the **host**, build a disc from your working copy and attach it:
+### Why a disc
+
+The `LabMonitor` switch has **no gateway and no route out**, which is the whole
+point of it (see [The map](#the-map)). That rules out every ordinary way of
+moving code:
+
+| Not available | Why |
+|---|---|
+| `git clone` in the guest | No route to the internet — and `certs/` is gitignored, so a clone leaves that machine on plaintext ([§0.4](testing.md)) |
+| A network share / `scp` | Nothing is listening, and the Engine guest has no desktop and no SSH configured until after step 8 |
+| Copy-paste, drag-and-drop | Needs Enhanced Session, which needs RDP running *inside* the guest. Debian has no desktop; Windows has one only after OOBE |
+| A USB stick | Hyper-V has no plain USB pass-through (same reason T2.2 moves to the host) |
+
+A DVD image is the one transport **both** guests read natively with zero setup,
+before any network or account exists. It is also read-only, so a guest cannot
+mutate the source, and one image serves both machines.
+
+### Build it
+
+On the **host**, from an elevated shell:
 
 ```powershell
 $stage = "$env:TEMP\labrepo"
+Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue   # never merge into a stale stage
 robocopy <repo> $stage /E /XD .venv __pycache__ .pytest_cache /NFL /NDL /NJH /NJS
 & "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe" -m -u2 -lLABREPO $stage <drive>:\LabRepo.iso
+```
+
+`oscdimg.exe` ships with the **Windows ADK** (*Deployment Tools* feature). It is
+the only external tool this procedure needs.
+
+What each part is doing:
+
+| Piece | Why |
+|---|---|
+| A staging copy | `oscdimg` images a directory as-is. Staging is where the exclusions happen |
+| `/XD .venv` | Host-built Windows binaries pinned to the host's interpreter. Each guest builds its own venv in step 5 |
+| `/XD __pycache__` | Bytecode compiled by the host's Python version — stale at best on a guest |
+| `/XD .pytest_cache` | Scratch |
+| `-m` | Ignore the default image size limit |
+| `-u2` | Write **UDF**. ISO 9660 alone truncates and upper-cases names, which would mangle `lab_engine_setup.sh` and every QML file |
+| `-lLABREPO` | Volume label. This is how you recognise the drive in the guest — no space after `-l` |
+| *(no `-h`)* | `oscdimg` skips hidden files unless told otherwise, so **`.git` is not on the disc**. Deliberate: the guests get a working copy, not a repository, which is the copy-don't-clone rule enforced by construction |
+
+**Verify before trusting it** — mount the image on the host and look:
+
+```powershell
+$m = Mount-DiskImage 'K:\LabRepo.iso' -PassThru | Get-Volume
+Get-ChildItem "$($m.DriveLetter):\scripts"   # all four lab scripts must be here
+Get-ChildItem "$($m.DriveLetter):\certs"     # two .pem files
+Dismount-DiskImage -ImagePath 'K:\LabRepo.iso'
+```
+
+> **The disc is a snapshot, and it goes stale silently.** Re-cut it after *any*
+> change to the code or the lab scripts. A stale disc does not announce itself:
+> the guest reports "no such file" for a script that is sitting in your editor,
+> or — worse — runs an older version of one that exists on both. This has
+> already happened once, on 2026-08-12, when `LabRepo.iso` predated
+> `lab_engine_setup.sh` and did not contain it at all.
+
+### Attach it
+
+A VM has **one** DVD drive, so attaching is a swap of the path rather than an
+addition. The VM may be running or off:
+
+```powershell
 Set-VMDvdDrive -VMName LabClient -Path <drive>:\LabRepo.iso
 ```
 
-*In the VM:*
+`Get-VMDvdDrive -VMName LabClient` shows what is loaded now. If you ever need
+both discs at once, `Add-VMDvdDrive` gives a second drive — not needed here,
+since Windows is installed by the time this disc is wanted.
+
+*In the VM* the disc appears as **`D:`**, labelled `LABREPO`:
 
 ```powershell
 mkdir C:\SystemMonitoring
 Copy-Item D:\* C:\SystemMonitoring -Recurse -Force
 dir C:\SystemMonitoring\certs        # must show two .pem files
 ```
+
+Copy off the disc rather than working from `D:` — the tree must be writable, and
+step 5 installs into it. Files copied off a CD keep the **read-only** attribute;
+`lab_client_setup.ps1` clears it.
 
 The same ISO is reused for the Engine VM in step 7, so this is not wasted work.
 
@@ -162,20 +230,34 @@ Same console rule as step 2: **console open first, then Action → Start.**
 At the installer, **deselect everything in tasksel** — no desktop, no print
 server. Keep *standard system utilities*. Set a root password you'll remember.
 
-Then attach the repo disc:
+Then swap the Debian netinst out for the repo disc. LabEngine's single DVD drive
+is holding the installer media until now, and Debian is on the VHDX by this
+point, so nothing is lost:
 
 ```powershell
 Set-VMDvdDrive -VMName LabEngine -Path <drive>:\LabRepo.iso
 ```
 
+Leaving the netinst attached is not harmless — the VM boots DVD-first, so it
+would walk back into the installer instead of the system you just built.
+
 ---
 
 ## 8. In the VM — provision the Engine
 
+Linux does not mount discs by itself without a desktop, so mount it by hand. The
+DVD drive is `/dev/sr0`; `-o ro` is explicit because the medium is read-only and
+a read-write attempt just fails less clearly:
+
 ```sh
 mount -o ro /dev/sr0 /mnt
+ls /mnt/scripts                     # the four lab scripts; if they are absent, the disc is stale — re-cut it (step 4)
 sh /mnt/scripts/lab_engine_setup.sh
 ```
+
+Invoke it as `sh <path>`, not `./lab_engine_setup.sh`. The image is written by a
+Windows tool, so the execute bit is not something to rely on, and the mount is
+read-only so `chmod +x` cannot fix it in place. `sh` sidesteps the question.
 
 Installs `python3`, verifies `sqlite3`, copies the repo to `/opt/SystemMonitoring`,
 sets `192.168.100.2`, and runs `engine --check`.
@@ -257,6 +339,13 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 | `ping 192.168.100.1` times out from a guest | Host firewall — a new Internal switch is classified **Public** with no inbound ICMP rule | `setup_lab_vms.ps1` sets it Private and adds the rule. Nothing real depends on ICMP; the gate is TCP 5000 |
 | Client connects but the Engine refuses it | `certs/` missing on one machine — it's gitignored, so a `git clone` on a guest gets none | **Copy** the working directory; never clone on a guest |
 | `pip install -e .` fails oddly after copying from the ISO | Files off a CD keep the read-only attribute | `lab_client_setup.ps1` clears it, or do it by hand |
+| A lab script is "not found" in the guest, but it is right there in your editor | `LabRepo.iso` predates the script. The disc is a snapshot, and nothing warns you | Re-cut the ISO (step 4) and verify it mounted on the host first. Bit us on 2026-08-12 |
+| A script runs in the guest but behaves like an older version | Same cause, worse symptom — the file exists on the stale disc, just out of date | As above. Check the disc's copy against the repo, not just its presence |
+| `mount /dev/sr0` says *no medium found* | No ISO in the VM's DVD drive, or it still holds the Debian netinst | `Get-VMDvdDrive -VMName LabEngine` on the host, then `Set-VMDvdDrive` to `LabRepo.iso` |
+| LabEngine boots back into the Debian installer | The netinst is still attached and the VM boots DVD-first | Swap the DVD path to `LabRepo.iso` (step 7) |
+| `./lab_engine_setup.sh` → *Permission denied* | No execute bit off a Windows-authored image, and the mount is read-only so `chmod` cannot help | `sh /mnt/scripts/lab_engine_setup.sh` |
+| Filenames on the disc are truncated or upper-cased | Built without `-u2`, so it is ISO 9660 only | Rebuild with `-u2` |
+| Both VMs show *Cannot connect to virtual machine configuration storage* | The lab drive reconnected after the Hyper-V service enumerated it — common with an external or secondary disk | `Restart-Service vmms -Force` with the VMs off. The configs are fine |
 | A stray `.avhdx` appears; checkpoints behave strangely | Hyper-V takes an **automatic checkpoint** on first start by default | `Set-VM -AutomaticCheckpointsEnabled $false`. Remove strays with `Remove-VMSnapshot` — **never** by deleting the `.avhdx` |
 | Time-based lockout tests behave impossibly after a revert | Guest clock is stale; lockout windows are time-based and HMAC-protected | `w32tm /resync` in the guest after **every** revert |
 | USB detection (T2.2) never fires in the VM | Hyper-V has no plain USB pass-through | Run T2.1 and T2.2 on the host instead |
