@@ -196,9 +196,30 @@ written; 8 GB is workable with the two conditions above.
    this VM means only the isolated switch.
 6. Client: `python -m client --engine 192.168.100.2`.
 7. Admin: `python -m admin --engine 192.168.100.2`.
-8. `certs/` travels with the repository, so it is already on all three; the
-   pinned identity `labmonitor-engine` means the addresses above never appear
-   in the certificate.
+8. `certs/` is gitignored, so it reaches each VM only if you **copy** the
+   working directory rather than `git clone` it (section 0.4). The pinned
+   identity `labmonitor-engine` means the addresses above never appear in the
+   certificate — which is why they can be changed without touching TLS.
+
+**Why `192.168.100.x`, and why no gateway.** The `.100` is chosen to miss what
+else is on the machine. `192.168.0.x` and `192.168.1.x` are what nearly every
+home and ISP router hands out, `.2.x` and `.10.x` are common seconds, and both
+the Hyper-V Default Switch and WSL2 sit somewhere in `172.16–31.x`. During
+provisioning the host holds three adapters at once — Wi-Fi, Default Switch and
+`vEthernet (LabMonitor)` — and two of them carrying the same prefix would give
+the host two routes to one destination, resolved by interface metrics. That is
+a bad thing to be debugging in the middle of Part 5, and `.100` makes it
+practically impossible.
+
+**No gateway is the part that does the work**, not the address. Without a
+default route the guests can reach the host and each other and nothing else,
+which is what makes `issues.md` C1 contained by construction rather than by
+anyone remembering a rule.
+
+Changing the range is a multi-place edit: `-HostIp` is a parameter of
+`scripts/setup_lab_vms.ps1`, but `.2` and `.3` are typed into the guests by hand
+and appear in the commands above. The certificate is the one thing that does not
+care — see step 8.
 
 ### 0.1b Three things a VM cannot tell you
 
@@ -684,7 +705,9 @@ server. Keep *standard system utilities*, and the SSH server if offered, since
    before anything else. The Engine owns all persistence through SQLite, and it
    is the one stdlib module a minimal image can be built without. Debian carries
    it; the check is here so a smaller image chosen later cannot fail quietly.
-3. Copy the repository in. `certs/` comes with it — nothing to generate.
+3. Copy the repository in — **copy the working directory, do not `git clone`**.
+   `certs/` is gitignored, and a clone would leave this machine on plaintext
+   while the client uses TLS (section 0.4).
 4. Nothing to `pip install`. Run from the repo root so `common/` resolves.
 5. `python3 -m engine --check` — T1.1 has what to expect.
 6. Static `192.168.100.2/24`, no gateway, in `/etc/network/interfaces`. Remove
@@ -705,14 +728,27 @@ Three machines, three different installs:
 `pip install -e .` is what makes `from common.protocol import ...` resolve on
 the two Windows machines.
 
-### 0.4 TLS — already done, nothing to do
+### 0.4 TLS — generated already, but it does not travel by itself
 
-**`certs/` is already generated and lives in the repository**, so it travels
-with the copy you put on each machine. TLS is presence-based: once
-`certs/engine-cert.pem` exists, all three units use it with no flag. There is
-no step here.
+**`certs/` already exists on the host** and does not need regenerating. TLS is
+presence-based: once `certs/engine-cert.pem` is there, all three units use it
+with no flag.
 
-Two things that only matter if something goes wrong:
+**`certs/` is gitignored** (`.gitignore:44`, alongside `*.pem` and `*.key`), so
+it is **not** in the repository. That makes how you move the code onto each VM
+the thing that decides whether TLS works:
+
+| Getting the code onto a VM | Result |
+|---|---|
+| Copy the working directory (drive redirection, `scp`) | `certs/` comes along. Correct |
+| `git clone` on the guest | **No `certs/`.** That machine silently runs plaintext |
+
+A half-configured lab is the bad case: the Engine finds a certificate and
+enables TLS, the client does not and connects in plaintext, and the Engine
+refuses it. The refusal is logged but does not name the cause. **Copy, don't
+clone** — and if you do clone, copy `certs/` in afterwards by hand.
+
+Two more things that only matter if something goes wrong:
 
 - **Do not regenerate the certificate.** `python -m scripts.generate_cert` would
   invalidate every client until the new `certs/` is re-copied everywhere.
@@ -762,7 +798,7 @@ the Engine VM. Everything below is what remains.
 - [ ] Install Debian netinst, **deselect everything in tasksel** — no desktop
 - [ ] `sudo apt install python3`
 - [ ] `python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`
-- [ ] Copy the repository in (`certs/` comes with it); nothing to `pip install`
+- [ ] Copy the repository in — **copy, do not `git clone`**; `certs/` is gitignored (0.4). Nothing to `pip install`
 - [ ] Move the adapter to `LabMonitor`, static `192.168.100.2/24`, no gateway
 - [ ] `python3 -m engine --check`
 - [ ] Checkpoint **"baseline"**
