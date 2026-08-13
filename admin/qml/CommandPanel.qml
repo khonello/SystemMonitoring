@@ -2,23 +2,33 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
+import "."
 
 Item {
     id: root
 
     readonly property bool ready: backend.connected && backend.selectedClient !== ""
 
+    // A toolbar strip, not a panel: every control is one row height, so the
+    // whole bar is 30px rather than the 56 it was when a ComboBox and a SpinBox
+    // each brought their own padding. The vertical space this returns goes to
+    // the thing an operator is actually reading -- the output below.
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 6
+        anchors.margins: Theme.space3
+        spacing: Theme.space2
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.space2
 
             Label {
-                text: "Commands"
+                text: "COMMANDS"
+                color: Theme.textDim
+                font.pixelSize: Theme.fontTiny
+                font.letterSpacing: 1.1
                 font.bold: true
             }
 
@@ -27,13 +37,13 @@ Item {
             ComboBox {
                 id: scriptType
                 model: ["python", "powershell"]
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 118
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
             }
 
             // Predefined scripts are extensions for small routine tasks, so
             // execution is capped. The client clamps this to 900s regardless.
-            Label { text: "Limit" }
-
             SpinBox {
                 id: scriptTimeout
                 from: 10
@@ -41,10 +51,9 @@ Item {
                 stepSize: 30
                 value: 300
                 editable: true
-                // Material draws larger +/- indicators than the previous style,
-                // which squeezed the value out of a 120px box until it read as
-                // "- s +" with no number between them.
-                Layout.preferredWidth: 170
+                Layout.preferredWidth: 132
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
 
                 textFromValue: function (value) { return value + "s" }
                 valueFromText: function (text) { return parseInt(text) || 300 }
@@ -54,12 +63,18 @@ Item {
             // before committing, rather than only being told off on send.
             Button {
                 text: "Check"
+                flat: true
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
                 enabled: scriptInput.text.trim().length > 0
                 onClicked: backend.checkScript(scriptInput.text, scriptType.currentText)
             }
 
             Button {
                 text: "Run script"
+                highlighted: true
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
                 enabled: root.ready && scriptInput.text.trim().length > 0
                 // Validated locally before it is sent; a script that will not
                 // compile, or that breaks the stdlib-only policy, never
@@ -70,23 +85,32 @@ Item {
 
             Button {
                 text: "Screenshot"
+                flat: true
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
                 enabled: root.ready
                 onClicked: backend.captureScreen(80)
             }
 
-            ToolSeparator {}
+            Rectangle { width: 1; height: 20; color: Theme.border }
 
             // Indeterminate to the student: no countdown is shown on the
             // client. The internal cap is an admin fail-safe, surfaced here
             // as a warning rather than there as a deadline.
             Button {
                 text: "Pause"
+                flat: true
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
                 enabled: root.ready
                 onClicked: backend.pauseSelected()
             }
 
             Button {
                 text: "Resume"
+                flat: true
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
                 enabled: root.ready
                 onClicked: backend.resumeSelected()
             }
@@ -104,7 +128,8 @@ Item {
                     id: scriptInput
                     enabled: root.ready
                     wrapMode: TextEdit.NoWrap
-                    font.family: "Consolas, monospace"
+                    font.family: Theme.mono
+                    font.pixelSize: Theme.fontBody
                     placeholderText: root.ready
                         ? "Script to run on " + backend.selectedClient
                         : "Connect and select a client"
@@ -127,7 +152,8 @@ Item {
                     id: outputView
                     readOnly: true
                     wrapMode: TextEdit.NoWrap
-                    font.family: "Consolas, monospace"
+                    font.family: Theme.mono
+                    font.pixelSize: Theme.fontBody
                     placeholderText: "Script output appears here as it arrives"
 
                     property bool following: true
@@ -162,21 +188,22 @@ Item {
 
             Layout.fillWidth: true
             visible: detail !== ""
-            implicitHeight: visible ? checkText.implicitHeight + 16 : 0
-            radius: 4
-            color: passed ? "#12261a" : "#2b1416"
+            implicitHeight: visible ? checkText.implicitHeight + Theme.space4 : 0
+            radius: Theme.radius
+            color: passed ? Qt.rgba(0.25, 0.73, 0.31, 0.10)
+                          : Qt.rgba(0.94, 0.28, 0.28, 0.10)
             border.width: 1
-            border.color: passed ? "#2e6b45" : "#8b3a3f"
+            border.color: passed ? Theme.ok : Theme.danger
 
             RowLayout {
                 anchors.fill: parent
-                anchors.margins: 8
-                spacing: 8
+                anchors.margins: Theme.space2
+                spacing: Theme.space2
 
                 Label {
                     text: checkResult.passed ? "✓" : "✕"
-                    color: checkResult.passed ? "#4fbf7b" : "#f0736f"
-                    font.pixelSize: 14
+                    color: checkResult.passed ? Theme.ok : Theme.danger
+                    font.pixelSize: Theme.fontMedium
                     font.bold: true
                     Layout.alignment: Qt.AlignTop
                 }
@@ -185,15 +212,15 @@ Item {
                     id: checkText
                     Layout.fillWidth: true
                     text: checkResult.detail
-                    color: checkResult.passed ? "#9fd8b6" : "#f0a9a6"
-                    font.pixelSize: 11
+                    color: checkResult.passed ? Theme.text : Theme.text
+                    font.pixelSize: Theme.fontSmall
                     wrapMode: Text.Wrap
                 }
 
                 Label {
                     text: "✕"
-                    color: "#6e7681"
-                    font.pixelSize: 12
+                    color: Theme.textFaint
+                    font.pixelSize: Theme.fontBody
                     Layout.alignment: Qt.AlignTop
 
                     MouseArea {
@@ -211,37 +238,49 @@ Item {
             text: "Python scripts: standard library only, and only modules "
                   + "available on Windows. No third-party packages - the "
                   + "client's runtime has no pip."
-            color: "#6e7681"
-            font.pixelSize: 10
+            color: Theme.textFaint
+            font.pixelSize: Theme.fontTiny
             wrapMode: Text.Wrap
         }
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.space2
 
             TextField {
                 id: processName
                 Layout.fillWidth: true
+                Layout.preferredHeight: Theme.controlHeight
                 enabled: root.ready
-                placeholderText: "Process name, e.g. chrome.exe"
+                font.family: Theme.mono
+                font.pixelSize: Theme.fontBody
+                placeholderText: "Process to terminate, e.g. chrome.exe"
             }
 
             CheckBox {
                 id: forceKill
                 text: "Force"
                 enabled: root.ready
+                font.pixelSize: Theme.fontBody
             }
 
             Button {
                 text: "Terminate"
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
+                Material.accent: Theme.danger
+                highlighted: processName.text.trim().length > 0
                 enabled: root.ready && processName.text.trim().length > 0
                 onClicked: backend.terminateProcess(processName.text.trim(), forceKill.checked)
             }
 
-            ToolSeparator {}
+            Rectangle { width: 1; height: 20; color: Theme.border }
 
             Button {
                 text: "Clear output"
+                flat: true
+                Layout.preferredHeight: Theme.controlHeight
+                font.pixelSize: Theme.fontBody
                 onClicked: outputView.text = ""
             }
         }

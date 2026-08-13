@@ -5,7 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, Slot
+from PySide6.QtCore import (
+    Property,
+    QAbstractListModel,
+    QModelIndex,
+    Qt,
+    Signal,
+    Slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +44,34 @@ class _DictListModel(QAbstractListModel):
     def roleNames(self) -> dict[int, bytes]:
         return {role: key.encode() for role, key in self._roles.items()}
 
+    # QML bindings cannot watch rowCount(): it is a plain method with no change
+    # signal, so `text: model.rowCount()` is evaluated once and then never
+    # again. That is why the old tab read "Applications (0)" while rows were
+    # arriving. `count` is a real property with a notify signal, so anything
+    # bound to it updates — and any binding that also wants a total should
+    # mention `count` so it re-evaluates on the same signal.
+    countChanged = Signal()
+
+    def _count(self) -> int:
+        return len(self._rows)
+
+    count = Property(int, _count, notify=countChanged)
+
+    @Slot(str, result=float)
+    def total(self, key: str) -> float:
+        """Sum one numeric column across every row.
+
+        Summed here rather than in QML because QML cannot read a model's roles
+        by index without a delegate, and because a loop in a binding would run
+        on every repaint rather than on every change.
+        """
+        running = 0.0
+        for row in self._rows:
+            value = row.get(key)
+            if isinstance(value, (int, float)):
+                running += float(value)
+        return running
+
     @Slot(list)
     def setRows(self, rows: list[dict[str, Any]]) -> None:
         """Replace every row.
@@ -47,6 +82,7 @@ class _DictListModel(QAbstractListModel):
         self.beginResetModel()
         self._rows = list(rows)
         self.endResetModel()
+        self.countChanged.emit()
 
     @Slot()
     def clear(self) -> None:

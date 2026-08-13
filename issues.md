@@ -1101,8 +1101,36 @@ verified against a running window rather than `--check-qml` alone:
    Material's larger indicators had squeezed the value out entirely, leaving
    `- s +` with no number between them.
 
-**Still open here:** the fleet view below, and a general pass over spacing and
-typography now that the shell is coherent.
+**Second pass, same day — a design system rather than more patches.** The
+console now has `Theme.qml` (one palette, one 4px spacing scale, one control
+height, one radius) plus three components: `Section` for titled panels,
+`SegmentedControl` for choices *within* a page, and `StatTile` for the numbers
+across the top of Monitoring. Specifically:
+
+- **Radius turned down** via `Material.roundedScale: SmallScale`. Material's
+  defaults are phone-sized pills, which is most of why the console read as an
+  app rather than an instrument.
+- **A tab bar directly under a tab bar** was the layout's worst moment — same
+  shape, same weight, two different meanings, so it read as a mistake because
+  visually it was one. Primary navigation moved into the header; a choice
+  within a page is a segmented control, so the two levels never look alike.
+- **Control heights unified at 30px.** The script-type box and the timeout
+  spinner each brought their own padding and made the command bar 56px tall.
+- **The client rail** is now dense rows with one state dot each (offline, ok,
+  paused — paused outranks connected, since that is the machine an operator
+  needs to notice) and an accent edge on the selection rather than a fill.
+- **Policy was rebuilt around blast radius.** Four stacked GroupBoxes gave
+  "terminate one process" the same visual weight as "block every machine in
+  the room". It is two columns now: standing policy for one machine on the
+  left, immediate and fleet-wide actions on the right, the destructive group
+  carrying a red edge and its own confirmation that names how many machines it
+  will reach.
+- **`count` on the models.** QML cannot bind to `rowCount()` — it has no change
+  signal, so `Applications (0)` was evaluated once and never again. Found while
+  restyling; it had been wrong the whole time.
+
+**Still open here:** the fleet view's per-client tiles, and per-tab last-sample
+timestamps (C18 item 2).
 
 **Requirement, decided 2026-08-13: the window opens maximized and stays that
 way.** Minimized or maximized, nothing in between. This is not decoration — it

@@ -5,6 +5,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "."
 
 Item {
     id: root
@@ -26,14 +27,19 @@ Item {
 
         delegate: Rectangle {
             width: listView.width
-            height: 44
-            color: index % 2 === 0 ? "transparent" : Qt.rgba(0.5, 0.5, 0.5, 0.06)
+            height: Theme.rowHeight
+            // Hover instead of zebra striping. Alternating fills add a second
+            // visual rhythm competing with the data; a row that lights under
+            // the cursor tells you where you are without patterning the panel.
+            color: rowHover.hovered ? Qt.rgba(1, 1, 1, 0.04) : "transparent"
+
+            HoverHandler { id: rowHover }
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                spacing: 10
+                anchors.leftMargin: Theme.space3
+                anchors.rightMargin: Theme.space3
+                spacing: Theme.space3
 
                 ColumnLayout {
                     spacing: 1
@@ -41,24 +47,28 @@ Item {
 
                     Label {
                         text: root.primary(model)
-                        font.bold: true
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBody
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
 
                     Label {
                         text: root.secondary(model)
-                        opacity: 0.6
-                        font.pixelSize: 11
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fontTiny
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
                 }
 
+                // Monospaced and right-aligned: figures that change on every
+                // sample must line up, or the eye re-reads the column each time.
                 Label {
                     text: root.trailing(model)
-                    font.family: "Consolas, monospace"
-                    font.pixelSize: 11
+                    color: Theme.textDim
+                    font.family: Theme.mono
+                    font.pixelSize: Theme.fontSmall
                     horizontalAlignment: Text.AlignRight
                 }
             }
@@ -82,17 +92,18 @@ Item {
 
         Label {
             text: root.emptyTitle
+            color: Theme.textDim
             font.bold: true
-            font.pixelSize: 14
-            opacity: 0.75
+            font.pixelSize: Theme.fontMedium
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
         }
 
         Label {
             text: root.emptyText
+            color: Theme.textFaint
+            font.pixelSize: Theme.fontSmall
             wrapMode: Text.Wrap
-            opacity: 0.55
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
         }

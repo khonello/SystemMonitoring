@@ -5,18 +5,27 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Window
+import "."
 
 ApplicationWindow {
     id: window
 
-    // One theme, stated once. The console previously inherited the platform
-    // default and arrived as two half-finished themes at once: light title bar
-    // and toolbar, dark body, light grey text areas. The style itself is
-    // selected in admin/style.py, which both this app and --check-qml call.
+    // One theme, stated once, and the values live in Theme.qml so nothing here
+    // invents its own. The console previously inherited the platform default
+    // and arrived as two half-finished themes at once: light title bar and
+    // toolbar, dark body, light grey text areas. The style itself is selected
+    // in admin/style.py, which both this app and --check-qml call.
     Material.theme: Material.Dark
-    Material.background: "#12161c"
-    Material.primary: "#1b2430"
-    Material.accent: "#4c8dff"
+    Material.background: Theme.canvas
+    Material.primary: Theme.surface
+    Material.accent: Theme.accent
+    Material.foreground: Theme.text
+
+    // ROUNDING, TURNED DOWN. Material's default radii are phone-sized -- pill
+    // buttons and heavily rounded fields -- which is most of why the console
+    // read as an app rather than an instrument. SmallScale gives a 4px corner
+    // that matches Theme.radius, and it is inherited by every control below.
+    Material.roundedScale: Material.SmallScale
 
     // MAXIMIZED, ALWAYS. issues.md C17.
     //
@@ -47,45 +56,100 @@ ApplicationWindow {
     visible: true
     title: "Lab Monitor - Administrator"
 
-    header: ToolBar {
-        // Tall enough for Material's floating field labels. At the default
-        // height "Engine host" and "Port" were clipped off the top edge, which
-        // reads as a rendering fault rather than a spacing one.
-        height: 76
+    // The header carries identity on the left, primary navigation in the
+    // middle and the connection on the right. Navigation lives up here rather
+    // than above the content because it then never sits directly on top of a
+    // second row of tabs -- the thing that made the old layout read as a
+    // mistake. Within a page, choices use SegmentedControl instead, so the two
+    // levels are never the same shape.
+    header: Rectangle {
+        implicitHeight: 52
+        color: Theme.surface
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: 1
+            color: Theme.border
+        }
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 16
-            anchors.rightMargin: 16
-            spacing: 10
+            anchors.leftMargin: Theme.space4
+            anchors.rightMargin: Theme.space4
+            spacing: Theme.space4
 
-            Label {
-                text: "Lab Monitor"
-                font.bold: true
-                font.pixelSize: 16
+            RowLayout {
+                spacing: Theme.space2
+
+                Rectangle {
+                    width: 8; height: 18; radius: 2
+                    color: Theme.accent
+                }
+
+                Label {
+                    text: "LAB MONITOR"
+                    color: Theme.text
+                    font.pixelSize: Theme.fontMedium
+                    font.bold: true
+                    font.letterSpacing: 1.4
+                }
+            }
+
+            Rectangle { width: 1; height: 22; color: Theme.border }
+
+            TabBar {
+                id: tabs
+                Layout.preferredWidth: contentWidth
+                background: null
+
+                TabButton { text: "Monitoring"; width: implicitWidth + 20 }
+                TabButton { text: "Reports"; width: implicitWidth + 20 }
+                TabButton { text: "Policy"; width: implicitWidth + 20 }
             }
 
             Item { Layout.fillWidth: true }
 
-            TextField {
-                id: hostField
-                text: defaultHost
-                placeholderText: "Engine host"
-                enabled: !backend.connected
-                Layout.preferredWidth: 150
+            // Connection details collapse to a single line once connected --
+            // an address you cannot change is reference information, not a
+            // control, and giving it two editable boxes overstates it.
+            RowLayout {
+                spacing: Theme.space2
+                visible: !backend.connected
+
+                TextField {
+                    id: hostField
+                    text: defaultHost
+                    placeholderText: "Engine host"
+                    Layout.preferredWidth: 140
+                    Layout.preferredHeight: Theme.controlHeight
+                    font.pixelSize: Theme.fontBody
+                }
+
+                TextField {
+                    id: portField
+                    text: defaultPort
+                    placeholderText: "Port"
+                    Layout.preferredWidth: 64
+                    Layout.preferredHeight: Theme.controlHeight
+                    font.pixelSize: Theme.fontBody
+                    validator: IntValidator { bottom: 1; top: 65535 }
+                }
             }
 
-            TextField {
-                id: portField
-                text: defaultPort
-                placeholderText: "Port"
-                enabled: !backend.connected
-                Layout.preferredWidth: 70
-                validator: IntValidator { bottom: 1; top: 65535 }
+            Label {
+                visible: backend.connected
+                text: hostField.text + ":" + portField.text
+                color: Theme.textDim
+                font.family: Theme.mono
+                font.pixelSize: Theme.fontBody
             }
 
             Button {
                 text: backend.connected ? "Disconnect" : "Connect"
+                Layout.preferredHeight: Theme.controlHeight
+                highlighted: !backend.connected
+                font.pixelSize: Theme.fontBody
                 onClicked: backend.connected
                     ? backend.disconnectFromEngine()
                     : backend.connectToEngine(hostField.text, parseInt(portField.text))
@@ -93,23 +157,51 @@ ApplicationWindow {
         }
     }
 
-    footer: ToolBar {
+    footer: Rectangle {
+        implicitHeight: 26
+        color: Theme.surface
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            color: Theme.border
+        }
+
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
+            anchors.leftMargin: Theme.space4
+            anchors.rightMargin: Theme.space4
+            spacing: Theme.space2
 
             Rectangle {
-                width: 10
-                height: 10
-                radius: 5
-                color: backend.connected ? "#2e9e4f" : "#9e2e2e"
+                width: 7; height: 7; radius: 4
+                color: backend.connected ? Theme.ok : Theme.danger
+
+                // A slow pulse while connected. The only animation in the
+                // console, and it earns its place: it is the difference between
+                // "the link is up" and "this window froze ten minutes ago".
+                SequentialAnimation on opacity {
+                    running: backend.connected
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 0.35; duration: 1400; easing.type: Easing.InOutQuad }
+                    NumberAnimation { to: 1.0;  duration: 1400; easing.type: Easing.InOutQuad }
+                }
             }
 
             Label {
                 text: backend.status
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall
                 elide: Text.ElideRight
                 Layout.fillWidth: true
+            }
+
+            Label {
+                visible: backend.selectedClient !== ""
+                text: "watching " + backend.selectedClient
+                color: Theme.accent
+                font.pixelSize: Theme.fontSmall
+                font.family: Theme.mono
             }
         }
     }
@@ -178,20 +270,8 @@ ApplicationWindow {
             SplitView.fillWidth: true
             spacing: 0
 
-            // Tabs sized to their labels, not stretched across the window.
-            // A TabBar distributes its width equally among its buttons unless
-            // they set one, so three tabs across a maximized window became
-            // three 640px slabs -- which is most of what "the dimensions look
-            // distorted" meant (issues.md C17).
-            TabBar {
-                id: tabs
-                Layout.fillWidth: true
-
-                TabButton { text: "Monitoring"; width: implicitWidth + 24 }
-                TabButton { text: "Reports"; width: implicitWidth + 24 }
-                TabButton { text: "Policy"; width: implicitWidth + 24 }
-            }
-
+            // Navigation moved into the header, so a page's own controls are
+            // never a second row of tabs under the first.
             StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
