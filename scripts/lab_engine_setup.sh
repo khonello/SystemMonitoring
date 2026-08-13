@@ -124,8 +124,52 @@ else
             UNMOUNT_AFTER=1
         fi
 
+        # REPLACE THE TREE, DO NOT MERGE INTO IT. A `cp -r` over an existing
+        # checkout leaves behind every file the disc no longer carries: a module
+        # deleted upstream still imports, a renamed script still runs, and the
+        # guest ends up running a mixture of two versions that exists nowhere
+        # else. Merging is how you get a bug that cannot be reproduced on the
+        # machine the code came from.
+        #
+        # THE DATABASE SURVIVES. The Engine owns all persistence and keeps
+        # monitoring.db in this directory, so deleting the tree wholesale would
+        # throw away the record as a side effect of a code update -- exactly the
+        # kind of silent, unrelated consequence this project keeps refusing
+        # elsewhere. It is moved aside and put back. Pass FRESH_DB=1 to start
+        # empty instead.
+        KEPT=""
+        if [ -d "$REPO" ]; then
+            case "$REPO" in
+                ""|"/"|"/usr"|"/etc"|"/var"|"/home")
+                    echo "Refusing to replace '$REPO' -- that is not a repository directory." >&2
+                    exit 1 ;;
+            esac
+
+            if [ "${FRESH_DB:-0}" != "1" ]; then
+                KEPT=$(mktemp -d)
+                for db in "$REPO"/*.db; do
+                    [ -e "$db" ] || continue
+                    doing "preserving $(basename "$db") across the refresh"
+                    mv "$db" "$KEPT"/
+                done
+            else
+                warn 'FRESH_DB=1: the existing monitoring database will be deleted'
+            fi
+
+            doing "removing the previous tree at $REPO"
+            rm -rf "$REPO"
+        fi
+
         mkdir -p "$REPO"
         cp -r "$SRC"/. "$REPO"/
+
+        if [ -n "$KEPT" ]; then
+            for db in "$KEPT"/*.db; do
+                [ -e "$db" ] || continue
+                mv "$db" "$REPO"/
+            done
+            rmdir "$KEPT" 2>/dev/null || true
+        fi
 
         if [ "$UNMOUNT_AFTER" = "1" ]; then
             umount "$SRC"

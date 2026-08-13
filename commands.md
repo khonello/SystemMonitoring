@@ -388,7 +388,8 @@ the floor.
 |---|---|---|
 | `REPO` | `/opt/SystemMonitoring` | Where the repository lands |
 | `RUN_AS` | `lab` | **The account that will run the Engine.** The script runs as root, so everything it copies is root-owned, and `chmod u+w` grants write to the *owner* — not to whoever serves. Without the `chown` this drives, the Engine accepts a client and dies on `attempt to write a readonly database`. `--check` is also run as this user, since a check under a different identity than the program proves nothing about the program |
-| `REFRESH` | `0` | `1` copies a newer disc over an existing tree. Without it an existing repository is left alone, which is right for provisioning and useless for iterating |
+| `REFRESH` | `0` | `1` **replaces** an existing tree with the disc's copy — the old directory is removed, not merged into, so a module deleted upstream stops importing and the guest cannot end up running a mixture of two versions. Without it an existing repository is left alone, which is right for provisioning and useless for iterating |
+| `FRESH_DB` | `0` | A refresh preserves `monitoring.db` across the replace, because the Engine owns all persistence and a code update should not silently discard the record. `1` starts with an empty database instead |
 | `STATIC_IP` / `NETMASK` | `192.168.100.2` / `255.255.255.0` | Address on the isolated switch |
 | `DRY_RUN` | `0` | Print, change nothing |
 
