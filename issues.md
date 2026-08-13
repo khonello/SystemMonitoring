@@ -1187,17 +1187,44 @@ Reports tab, which does query the Engine (`_REPORT_QUERIES`). The gap is not
 the architecture, it is that the live view gives the operator no way to tell
 "nothing has arrived yet" from "this client reports nothing".
 
+**How long "empty" should legitimately last** — the numbers matter, because
+they separate patience from a bug. `common/constants.py`: heartbeat **15s**,
+`APP_DATA` **30s**, `NETWORK_DATA` **60s**. So Applications should populate
+within half a minute of connecting and Network within a minute. Still empty
+after that, with the Engine logging relays to one admin peer, is a defect to
+chase rather than a wait.
+
+**An empty table with column headers is indistinguishable from a broken
+feature.** That is the actual complaint, and it is right: the UI currently
+presents three states — "nothing has arrived yet", "this client genuinely has
+none", and "this cannot work on this hardware" — as one blank grid. USB is the
+sharpest case, since in a Hyper-V guest it can *never* fill (no plain USB
+pass-through), so the tab advertises a capability the machine cannot deliver
+and says nothing about why.
+
 **What would fix it, cheapest first:**
 
-1. An empty-state line in each tab — *"Waiting for the next report from
-   `<client>`; live data only, see Reports for history."* Pure QML, no protocol
-   change, and it removes the ambiguity entirely.
-2. Show the time of the last received sample per tab, so a stale view is
-   visibly stale rather than silently so.
-3. Backfill on selection by issuing the matching report request, so the tab
+1. **A per-tab empty state that names the reason and the interval.** Pure QML,
+   no protocol change, and it collapses the ambiguity:
+   - Applications — *"No data yet. `<client>` reports every 30 seconds."*
+   - Network — *"No data yet. `<client>` reports every 60 seconds."*
+   - USB — *"No USB events recorded for `<client>`."* Correct on real hardware,
+     where the feature does work, and honest in a VM where it will stay empty.
+   Naming the interval turns "is this broken?" into "wait 30 seconds", which is
+   the whole problem.
+2. **Show the time of the last received sample per tab**, so a stale view is
+   visibly stale rather than silently so — and so a client that stopped
+   reporting is distinguishable from one that never started.
+3. **Backfill on selection** by issuing the matching report request, so a tab
    opens populated. More work, and it blurs the live/history split that the
-   Reports tab currently makes clean — worth doing only if the empty state
-   still confuses people after 1 and 2.
+   Reports tab currently keeps clean — worth doing only if 1 and 2 leave people
+   confused.
+
+Do **not** make the GUI explain Hyper-V's lack of USB pass-through. That is
+true of this lab, not of the product, and a deployed agent on real hardware
+does fill that tab. The caveat belongs in the demo script and in `testing.md`
+(which already moves T2.2 to the host), not in a label that would be wrong
+everywhere it actually ships.
 
 **Do this with C17**, not before it: both are Admin presentation work, both are
 QML-only, and the fleet view proposed in C17 changes what "selected client"
