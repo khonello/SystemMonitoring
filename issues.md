@@ -1078,6 +1078,26 @@ Distinct from every other open item here in that it is **presentation quality,
 not correctness**. The Admin works — it registers, heartbeats, dispatches
 commands, receives telemetry, and its QML loads clean under `--check-qml`.
 
+**Requirement, decided 2026-08-13: the window opens maximized and stays that
+way.** Minimized or maximized, nothing in between. This is not decoration — it
+is the direct fix for "dimensions read as distorted", which is what a layout
+tuned at one size does when dragged to another. An operator console is a
+full-screen tool; sizing it like a utility window is half of why it reads as
+scaffolding.
+
+Two things to get right while implementing it:
+
+- **Maximized, not borderless full-screen.** `visibility: Window.Maximized`
+  keeps the title bar and taskbar, so the operator can still minimise, alt-tab
+  and see the clock. `Window.FullScreen` hides all of that and reads as a kiosk
+  — wrong for the machine doing the *supervising*, and awkward to escape from
+  during a demonstration.
+- **Maximized is not an excuse for fixed pixel positions.** The lab is
+  demonstrated on a projector or a second machine whose resolution is not this
+  laptop's, so the layout still has to hold at 1024×768 as well as at full HD.
+  Anchors, minimum sizes and proportional columns — not coordinates. Getting
+  this wrong turns one distorted layout into two.
+
 **Two ways to fix it, and they are not close in cost.**
 
 - **Fix the QML.** Sizing, spacing, alignment and a coherent visual hierarchy
@@ -1293,6 +1313,46 @@ keep for 30 days across 50 machines. Every real console separates them.
 correct for reporting. This is a Phase 6 item at the earliest — after
 integration and load testing, which is where the write-cost question gets a
 real answer rather than an estimate.
+
+#### The shape it should take: a watch subscription, not a mode
+
+Proposed 2026-08-13 as a GUI toggle between "live" and "retention" modes, live
+meaning fast and unpersisted. **Agreed on the feature, rejected on the mode.**
+
+A toggle that changes *what is recorded* fails in two ways this project already
+has positions on. It is a hidden mode — C17 rejects a separate fleet page for
+precisely that reason, that selection must never become state you can forget
+you are in. And an operator who leaves it in "live" and walks away has silently
+stopped the audit trail, which is discovered at the moment the record is needed
+and not before. **Recording must not depend on anyone's UI state.**
+
+**Retention runs unconditionally; "Live" is an additional subscription.** The
+recorded series keeps its interval always — the Engine owns persistence and
+that does not become negotiable from a GUI. When an admin selects a client and
+asks to watch it, *that client* additionally streams at 1–5s for the duration,
+display-only, and stops when the watch ends. The toggle then means "am I
+watching", not "is the system recording", which are very different promises to
+make about someone else's machine.
+
+Two constraints follow from precedents already set here:
+
+- **Capped, and it lapses.** The indeterminate pause is capped at an hour not
+  against network loss but against *the admin vanishing* (B10). A forgotten
+  watch session is the same hazard multiplied by fanout, so it needs the same
+  kind of ceiling and must end on deselect and on disconnect.
+- **Not durable.** `DURABLE_COMMANDS` are policy commands declaring state to
+  converge to. A watch request is point-in-time, like a capture or a pause, and
+  must be `undeliverable` for an offline client rather than queued — replaying
+  "stream fast" at a machine that reconnects tomorrow is exactly wrong.
+
+**Snapshots — deferred, not rejected.** A manual "capture state now" largely
+duplicates the recorded series plus Reports. It earns a place only as a marker
+of *the moment an operator intervened* — state at the point a machine was
+locked, say — which is a defence-narrative feature rather than a monitoring
+one, and deserves its own decision rather than arriving bundled with this.
+
+The UI half of this belongs with the C17 pass; the protocol and client halves
+are Phase 6. Neither should start before Phase 5 passes.
 
 **Deliberate decisions not to build something, recorded so they are not
 mistaken for oversights.** Nothing here is scheduled. Each entry says what was
