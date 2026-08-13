@@ -135,10 +135,17 @@ The script exists because this is five commands with two silent failure modes,
 both of which cost an evening on 2026-08-13 — a running VM holds the image, so
 overwriting it fails outright, and `Set-VMDvdDrive` can leave the drive **empty**
 while reporting a path, handing the guest the *previous* disc. So it ejects
-before copying, verifies `DvdMediaType` rather than the path, retries once, and
-finally mounts the finished image to confirm the scripts are physically on it
-and that `lab_engine_setup.sh` hashes equal to the working copy. It refuses to
-build at all without `certs/`.
+before copying, verifies `DvdMediaType` rather than the path, and retries once.
+It refuses to build at all without `certs/`.
+
+**It verifies the image before attaching it, never after** — mounting the
+finished disc, to confirm the scripts are physically on it and that
+`lab_engine_setup.sh` hashes equal to the working copy, is done against the
+temporary copy. Mounting an ISO on the *host* takes the medium away from every
+guest holding it, so checking the placed file would leave both drives empty and
+the next `mount` in the guest failing with `Can't open blockdev`. That is what
+happened on 2026-08-13, and it reads as a guest fault because the error names
+`/dev/sr0`.
 
 **One thing it cannot do: unmount the disc inside a running guest.** Linux holds
 the medium while it is mounted, so `umount /mnt` in the guest comes first. The
