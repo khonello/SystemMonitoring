@@ -412,9 +412,27 @@ a read-write attempt just fails less clearly:
 
 ```sh
 mount -o ro /dev/sr0 /mnt
-ls /mnt/scripts                     # the four lab scripts; if they are absent, the disc is stale — re-cut it (step 4)
+ls /mnt/scripts                     # freshness check, not the point — see below
 sh /mnt/scripts/lab_engine_setup.sh
 ```
+
+**That mounts the whole project, not just the scripts.** `/mnt` is the entire
+disc: `engine/`, `common/`, `certs/`, every doc. The `ls` is only a cheap test
+that you have a *current* cut of the disc — `scripts/` is the directory that
+came up missing when the ISO was stale, so it is the fastest tell.
+
+**The script then copies all of it to `/opt/SystemMonitoring`** — it mounts the
+disc a second time of its own accord, `cp -r`s the lot including dotfiles,
+unmounts, and `chmod -R u+w`s the result, because files off a CD arrive
+read-only. The Engine is not run from `/mnt` for two reasons that both matter:
+the mount is **read-only** and the Engine *writes* (it owns all persistence, and
+`monitoring.db` is created in the repo root), and the mount is **transient** —
+eject the disc or reboot and it is gone.
+
+It then checks `certs/` for both the certificate and the key, and refuses to
+continue without them. That is precisely the copy-versus-clone difference from
+step 4: a clone would leave this machine serving plaintext while the client
+speaks TLS, and the Engine's refusal of that client never names the cause.
 
 Invoke it as `sh <path>`, not `./lab_engine_setup.sh`. The image is written by a
 Windows tool, so the execute bit is not something to rely on, and the mount is
