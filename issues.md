@@ -1345,6 +1345,37 @@ Two constraints follow from precedents already set here:
   must be `undeliverable` for an offline client rather than queued — replaying
   "stream fast" at a machine that reconnects tomorrow is exactly wrong.
 
+**The inverted proposal — live by default, retention opt-in — and why the
+answer depends on who owns the switch.** Put 2026-08-13: make live the default
+and persist only when retention is switched on.
+
+- **As a GUI control, no.** Telemetry fans out to *every* connected admin and
+  there is one database, so a per-operator toggle drives a system-wide,
+  permanent side effect. Two operators disagreeing is not an edge case, it is
+  the normal state of a shared console: last click wins and neither can see it.
+  Default-off compounds it — the audit trail acquires holes, and the holes
+  correlate with whoever forgot.
+- **As system configuration, yes.** "Record, at these intervals" belongs beside
+  the retention period, which is already an operator decision (A1), and one of
+  its settings may legitimately be *off*. That is not a mode; it is how a
+  deployment is set up. It is also most of proposal 1 above, which makes the
+  intervals configurable in the first place.
+
+**Live-by-default should still be scoped to the watched client, for a reason
+that is not about the Engine.** The collection cost lands on the *monitored*
+machine: `process_iter` every two seconds across fifty student PCs, feeding a
+view nobody has open, is real CPU on someone else's computer and the operator
+never feels it. One machine fast while the rest report normally puts the cost
+where the attention is.
+
+**If the goal is "record only when it matters", build a session, not a mode.**
+"Start recording — exam session, 2 hours" has a beginning, an end, an operator
+attached to it, and expires on its own. That is the shape of everything else
+here: the lockout schedule, the capped pause, every command carrying an id into
+an audit trail. A mode is ambient and forgettable; a session is an event that
+happened and can be shown to have happened — which is the difference that
+matters when someone asks what was recorded about them, and why.
+
 **Snapshots — deferred, not rejected.** A manual "capture state now" largely
 duplicates the recorded series plus Reports. It earns a place only as a marker
 of *the moment an operator intervened* — state at the point a machine was
