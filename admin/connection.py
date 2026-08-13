@@ -28,6 +28,7 @@ from common.constants import (
     MSG_REGISTER_REJECT,
     MSG_REGISTER_RESPONSE,
     MSG_REPORT_REQUEST,
+    MSG_WATCH,
     REGISTRATION_TIMEOUT,
     ROLE_ADMIN,
     STREAM_LIMIT,
@@ -143,6 +144,18 @@ class EngineConnection:
 
     async def request_client_list(self) -> bool:
         return await self.send(create_message(MSG_CLIENT_LIST, {}, client_id=self.admin_id))
+
+    async def declare_watch(self, client_id: str) -> bool:
+        """Tell the Engine which client this console is watching.
+
+        An empty `client_id` means "nobody", which is a real state rather than
+        an omission: it stops this client's telemetry being relayed here and
+        lets the machine go back to its recording intervals if nobody else is
+        looking at it.
+        """
+        return await self.send(
+            create_message(MSG_WATCH, {"client_id": client_id}, client_id=self.admin_id)
+        )
 
     async def request_report(self, report: str, client_id: str) -> bool:
         return await self.send(

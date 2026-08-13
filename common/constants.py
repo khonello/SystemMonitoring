@@ -39,6 +39,29 @@ APP_DATA_INTERVAL: Final[int] = 30
 NETWORK_DATA_INTERVAL: Final[int] = 60
 IDLE_CHECK_INTERVAL: Final[int] = 30
 
+# The rate a client samples at while an admin is watching it. These are for
+# the SCREEN only -- the recorded series keeps the intervals above, always, for
+# every client, because a record that can be switched off by whoever happens to
+# be looking is not a record (issues.md C19).
+#
+# The cost of this lands on the MONITORED machine, not on the console, which is
+# why it is scoped to the one client an admin has selected rather than applied
+# to the fleet. MAX_ADMINS is 5 and each admin watches one client, so at most
+# five machines sample fast however large the lab grows.
+WATCH_APP_DATA_INTERVAL: Final[int] = 3
+WATCH_NETWORK_DATA_INTERVAL: Final[int] = 3
+
+# Fast sampling expires by itself unless renewed. The Engine turns it off when
+# the watch ends, but an Engine that dies, or a network that drops, must not
+# leave a machine sampling every three seconds forever -- the same reasoning
+# that caps the indeterminate pause against the admin vanishing rather than
+# against network loss.
+WATCH_TTL: Final[int] = 90
+
+# How often the Engine renews an active watch, comfortably inside the TTL so
+# a single lost message does not end the live view.
+WATCH_RENEW_INTERVAL: Final[int] = 30
+
 # A client that sends nothing at all for this long is treated as gone. Must
 # stay comfortably above HEARTBEAT_INTERVAL or healthy clients get dropped.
 HEARTBEAT_TIMEOUT: Final[int] = 60
@@ -95,6 +118,13 @@ MSG_SET_TIME_RESTRICTION: Final[str] = "SET_TIME_RESTRICTION"
 MSG_SHOW_DIALOG: Final[str] = "SHOW_DIALOG"
 MSG_SET_PAUSE: Final[str] = "SET_PAUSE"
 
+# Engine to Client: sample fast for a while, because somebody is watching.
+# Payload is {"fast": bool, "ttl": seconds}. Never queued for an offline client
+# (it is absent from DURABLE_COMMANDS): "stream fast" replayed at a machine that
+# reconnects tomorrow, for an operator who went home, is exactly the surprise
+# that rule exists to prevent.
+MSG_SET_SAMPLE_RATE: Final[str] = "SET_SAMPLE_RATE"
+
 # An indeterminate pause: the admin holds the lab's screens with no stated end
 # time, and drops it when ready. To the student it is simply "paused" — no
 # countdown, because there is no deadline to show.
@@ -135,6 +165,20 @@ MSG_CLIENT_LIST: Final[str] = "CLIENT_LIST"
 MSG_REPORT_REQUEST: Final[str] = "REPORT_REQUEST"
 MSG_REPORT: Final[str] = "REPORT"
 
+# Admin to Engine: "I am watching this client" (empty client_id = watching
+# nobody). Two things follow from one declaration, which is why it is a
+# subscription rather than a command (issues.md C19, D5):
+#
+#   - Telemetry relay is scoped to the admins actually watching that client,
+#     instead of every client's data reaching every console.
+#   - The watched client is asked to sample fast, which is what makes the view
+#     live rather than a report that arrives every half minute.
+#
+# Selection IS the subscription. There is deliberately no "go live" control:
+# a mode an operator can leave switched on is a mode they can forget, and the
+# one thing that must never depend on a forgotten toggle is what gets recorded.
+MSG_WATCH: Final[str] = "WATCH"
+
 # Engine to Admin: a client's pause state changed. Pushed on change rather
 # than polled, so a pause set from another console — or one that lapsed on its
 # own — appears without waiting for a roster refresh.
@@ -167,6 +211,7 @@ CLIENT_COMMANDS: Final[frozenset[str]] = frozenset({
     MSG_SET_TIME_RESTRICTION,
     MSG_SHOW_DIALOG,
     MSG_SET_PAUSE,
+    MSG_SET_SAMPLE_RATE,
 })
 
 # ---------------------------------------------------------------------------

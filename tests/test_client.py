@@ -17,9 +17,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from client import executor, lockout, policy, session, single_instance, state
+from client import executor, lockout, policy, sampling, session, single_instance, state
+from client.config import MONITOR_INTERVAL, NETWORK_INTERVAL
 from client.connection import reconnect_delay
 from client.executor import handle_command, running_scripts, terminate_process
+from common.constants import WATCH_APP_DATA_INTERVAL, WATCH_NETWORK_DATA_INTERVAL
 from client.monitors.network_monitor import collect_network_data
 from client.monitors.process_monitor import collect_process_data
 from client.monitors.usb_monitor import get_idle_time, poll_usb_events, reset_baseline
@@ -1238,3 +1240,65 @@ def test_the_watchdog_runs_without_an_id():
     from client import watchdog
 
     assert watchdog.main([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Sampling rate — fast while watched, and self-expiring
+# ---------------------------------------------------------------------------
+
+
+def test_an_unwatched_agent_uses_its_recording_intervals():
+    assert sampling.is_fast() is False
+    assert sampling.app_interval() == MONITOR_INTERVAL
+    assert sampling.network_interval() == NETWORK_INTERVAL
+
+
+def test_being_watched_shortens_both_collection_intervals():
+    sampling.apply_command({"fast": True, "ttl": 60})
+
+    assert sampling.app_interval() == WATCH_APP_DATA_INTERVAL
+    assert sampling.network_interval() == WATCH_NETWORK_DATA_INTERVAL
+
+
+def test_fast_sampling_lapses_on_its_own(monkeypatch):
+    """The safety net for a vanished Engine, not for an orderly deselect.
+
+    Without this, a console that crashed -- or a network that dropped -- would
+    leave a student's machine collecting every three seconds indefinitely.
+    """
+    clock = [1000.0]
+    monkeypatch.setattr(sampling.time, "monotonic", lambda: clock[0])
+
+    sampling.apply_command({"fast": True, "ttl": 30})
+    assert sampling.is_fast() is True
+
+    clock[0] += 29
+    assert sampling.is_fast() is True
+
+    clock[0] += 2
+    assert sampling.is_fast() is False
+    assert sampling.app_interval() == MONITOR_INTERVAL
+
+
+def test_a_generous_ttl_is_capped_rather_than_trusted():
+    """A TTL of a day would defeat the point of having one."""
+    sampling.apply_command({"fast": True, "ttl": 86400})
+
+    assert sampling.is_fast() is True
+    # Capped at the ceiling, so it still expires within the intended window.
+    assert sampling.app_interval() == WATCH_APP_DATA_INTERVAL
+
+
+def test_a_malformed_ttl_falls_back_to_the_default():
+    result = sampling.apply_command({"fast": True, "ttl": "soon"})
+
+    assert result["status"] == "success"
+    assert sampling.is_fast() is True
+
+
+def test_turning_fast_sampling_off_takes_effect_immediately():
+    sampling.apply_command({"fast": True, "ttl": 90})
+    sampling.apply_command({"fast": False})
+
+    assert sampling.is_fast() is False
+    assert sampling.network_interval() == NETWORK_INTERVAL

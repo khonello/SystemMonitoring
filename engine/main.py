@@ -26,6 +26,7 @@ from common.constants import (
     ROLE_CLIENT,
     STREAM_LIMIT,
     VALID_ROLES,
+    WATCH_RENEW_INTERVAL,
 )
 from common.protocol import ProtocolError, create_message, get_payload
 from engine import connection_manager, database
@@ -35,7 +36,12 @@ from engine.auth import (
     log_auth_state,
     verify_challenge_response,
 )
-from engine.command_handler import flush_outbox, process_message
+from engine.command_handler import (
+    flush_outbox,
+    process_message,
+    release_watches,
+    renew_watches,
+)
 from engine.config import (
     CLIENT_HEARTBEAT_TIMEOUT,
     LOG_LEVEL,
@@ -261,6 +267,12 @@ async def handle_client(
         connection_manager.unregister(peer_id)
         if role == ROLE_CLIENT:
             database.mark_client_offline(peer_id)
+        else:
+            # Release whatever this console was watching, so the machine it had
+            # selected returns to its recording rate now rather than when the
+            # client-side TTL notices. That TTL is the net for an Engine that
+            # dies; a console closing cleanly should not need it.
+            await release_watches(peer_id)
         logger.info("Disconnected %s (%d live)", peer_id, connection_manager.connection_count())
         await close_writer(writer)
 
@@ -285,6 +297,27 @@ async def reap_stale_connections() -> None:
             connection_manager.unregister(peer_id)
             if writer is not None:
                 await close_writer(writer)
+
+
+async def renew_watch_loop() -> None:
+    """Keep fast sampling alive on watched clients, and only on those.
+
+    A client's fast rate expires by itself after WATCH_TTL so that an Engine
+    which dies, or a network that drops, cannot strand a machine sampling every
+    few seconds indefinitely. That safety net is only safe if a genuinely live
+    watch is renewed well inside the window, which is this loop's entire job.
+    It sends nothing when nobody is watching anything.
+    """
+    shutdown = _get_shutdown()
+
+    while not shutdown.is_set():
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=WATCH_RENEW_INTERVAL)
+            return
+        except asyncio.TimeoutError:
+            pass
+
+        await renew_watches()
 
 
 async def prune_loop() -> None:
@@ -361,6 +394,7 @@ async def start_server() -> None:
     background = [
         asyncio.create_task(reap_stale_connections(), name="reaper"),
         asyncio.create_task(prune_loop(), name="pruner"),
+        asyncio.create_task(renew_watch_loop(), name="watch-renewer"),
     ]
 
     async with server:

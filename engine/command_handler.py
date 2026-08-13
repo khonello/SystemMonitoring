@@ -39,7 +39,9 @@ from common.constants import (
     MSG_PAUSE_STATE,
     MSG_REPORT,
     MSG_REPORT_REQUEST,
+    MSG_SET_SAMPLE_RATE,
     MSG_USB_EVENT,
+    MSG_WATCH,
     REPORT_APP_USAGE,
     REPORT_COMMAND_HISTORY,
     REPORT_NETWORK_24H,
@@ -49,10 +51,11 @@ from common.constants import (
     STATUS_ERROR,
     STATUS_SUCCESS,
     VALID_REPORTS,
+    WATCH_TTL,
 )
 from common.protocol import create_message
 from common.utils import new_command_id, new_trace_id
-from engine import connection_manager, database, routing
+from engine import connection_manager, database, routing, watch
 from engine.config import OUTBOX_TTL
 from engine.routing import (
     ADMINS,
@@ -225,6 +228,85 @@ _REPORT_QUERIES: dict[str, Callable[[str], Any]] = {
 }
 
 
+async def _set_sample_rate(client_id: str, fast: bool, trace_id: str | None = None) -> None:
+    """Ask one client to sample fast, or to go back to its recording intervals.
+
+    Best-effort on purpose. An offline client cannot be told anything, and this
+    must never be queued for its next registration — `MSG_SET_SAMPLE_RATE` is
+    absent from DURABLE_COMMANDS for the same reason a screen capture is: it is
+    a point-in-time request on behalf of someone who is watching *now*, and
+    replaying it tomorrow serves an operator who went home hours ago.
+    """
+    await send_command_to_client(
+        client_id,
+        MSG_SET_SAMPLE_RATE,
+        {"fast": fast, "ttl": WATCH_TTL},
+        trace_id=trace_id,
+    )
+
+
+async def handle_watch(context: Context, payload: dict[str, Any]) -> None:
+    """An admin declared which client it is watching.
+
+    Two consequences, and they are the whole feature: this admin's telemetry
+    relay is scoped to that client, and that client is asked to sample fast so
+    the view is live. Recording is untouched — the persist step never consults
+    the registry.
+
+    The rate change is driven off *transitions*, not off every message. A client
+    is told to speed up when it gains its first watcher and to slow down when it
+    loses its last, so two admins watching the same machine do not fight over
+    it and a repeated selection of the same client costs nothing.
+    """
+    client_id = str(payload.get("client_id", ""))
+    dropped, taken_up = watch.set_watch(context.peer_id, client_id)
+
+    if dropped is None and taken_up is None:
+        return
+
+    # Order matters only in the degenerate case where they are equal, which
+    # set_watch has already ruled out by returning early.
+    if dropped is not None and not watch.is_watched(dropped):
+        logger.info(
+            "[%s] %s stopped watching %s; last watcher, returning it to recording rate",
+            context.trace_id, context.peer_id, dropped,
+        )
+        await _set_sample_rate(dropped, False, context.trace_id)
+
+    if taken_up is not None:
+        logger.info(
+            "[%s] %s is watching %s (%d watcher(s))",
+            context.trace_id, context.peer_id, taken_up,
+            len(watch.watchers_of(taken_up)),
+        )
+        await _set_sample_rate(taken_up, True, context.trace_id)
+
+
+async def release_watches(admin_id: str) -> None:
+    """Drop a departed admin's subscription and slow its client back down.
+
+    Called when an admin disconnects. The client-side TTL would eventually
+    expire the fast rate on its own, but that is the safety net for an Engine
+    that dies or a network that drops — a console closing cleanly should not
+    leave a machine sampling every few seconds until a timeout notices.
+    """
+    dropped = watch.clear_watch(admin_id)
+    if dropped is not None and not watch.is_watched(dropped):
+        await _set_sample_rate(dropped, False)
+
+
+async def renew_watches() -> None:
+    """Re-assert fast sampling on every watched client, once.
+
+    The client's fast rate expires by itself (WATCH_TTL) so that a vanished
+    Engine cannot strand a machine at three-second sampling. That safety net
+    only works if a *live* watch is renewed inside the window, which is what
+    this does; engine.main runs it on a timer.
+    """
+    for client_id in watch.watched_clients():
+        await _set_sample_rate(client_id, True)
+
+
 async def handle_report_request(context: Context, payload: dict[str, Any]) -> None:
     """Run one aggregation query on an admin's behalf.
 
@@ -291,14 +373,21 @@ _ROUTES: dict[str, Route] = {
         FLOW_PRESENCE, ANY_PEER, persist=_persist_heartbeat, handler=handle_heartbeat
     ),
 
+    # Persist first, relay second — and only the relay is scoped. Every sample
+    # is written down for every client whether or not a console has it on
+    # screen; `relay_targets` decides who sees it now, never what is kept
+    # (issues.md D5, C19).
     MSG_APP_DATA: Route(
-        FLOW_TELEMETRY, CLIENTS, persist=_persist_app_data, relay_to=ROLE_ADMIN
+        FLOW_TELEMETRY, CLIENTS, persist=_persist_app_data,
+        relay_to=ROLE_ADMIN, relay_targets=watch.watchers_of,
     ),
     MSG_NETWORK_DATA: Route(
-        FLOW_TELEMETRY, CLIENTS, persist=_persist_network_data, relay_to=ROLE_ADMIN
+        FLOW_TELEMETRY, CLIENTS, persist=_persist_network_data,
+        relay_to=ROLE_ADMIN, relay_targets=watch.watchers_of,
     ),
     MSG_USB_EVENT: Route(
-        FLOW_TELEMETRY, CLIENTS, persist=_persist_usb_event, relay_to=ROLE_ADMIN
+        FLOW_TELEMETRY, CLIENTS, persist=_persist_usb_event,
+        relay_to=ROLE_ADMIN, relay_targets=watch.watchers_of,
     ),
 
     MSG_COMMAND_RESPONSE: Route(
@@ -317,6 +406,11 @@ _ROUTES: dict[str, Route] = {
 
     MSG_CLIENT_LIST: Route(FLOW_QUERY, ADMINS, handler=handle_client_list_request),
     MSG_REPORT_REQUEST: Route(FLOW_QUERY, ADMINS, handler=handle_report_request),
+
+    # A subscription, not a command: it changes who receives this client's
+    # telemetry and how fast that client samples, and nothing else. It reaches
+    # a client only as a SET_SAMPLE_RATE the handler sends on its own.
+    MSG_WATCH: Route(FLOW_QUERY, ADMINS, handler=handle_watch),
 
     MSG_ADMIN_COMMAND: Route(FLOW_DISPATCH, ADMINS, handler=handle_admin_command),
 }

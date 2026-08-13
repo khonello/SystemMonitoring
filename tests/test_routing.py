@@ -18,16 +18,21 @@ from common.constants import (
     MSG_APP_DATA,
     MSG_REPORT_REQUEST,
     MSG_SET_APP_BLACKLIST,
+    MSG_SET_SAMPLE_RATE,
     MSG_TERMINATE_PROCESS,
+    MSG_WATCH,
     ROLE_ADMIN,
     ROLE_CLIENT,
+    WATCH_TTL,
 )
 from common.protocol import create_message, decode_message
-from engine import connection_manager, database, routing
+from engine import connection_manager, database, routing, watch
 from engine.command_handler import (
     broadcast_command,
     flush_outbox,
     process_message,
+    release_watches,
+    renew_watches,
     send_command_to_client,
 )
 
@@ -59,9 +64,23 @@ def _broken_writer() -> MagicMock:
     return writer
 
 
-def _connect_admin(writer: MagicMock | None = None) -> MagicMock:
+def _connect_admin(
+    writer: MagicMock | None = None,
+    admin_id: str = ADMIN,
+    watching: str | None = CLIENT,
+) -> MagicMock:
+    """Connect an admin, watching CLIENT by default.
+
+    Telemetry now reaches only the admins that have declared a watch on the
+    sending client (`issues.md` D5), so "connected" is no longer sufficient to
+    receive it. The default keeps every telemetry test reading as it did —
+    an operator with that machine on screen — while `watching=None` gives the
+    unwatched case its own coverage rather than leaving it implied.
+    """
     writer = writer or _capturing_writer()
-    connection_manager.register(ADMIN, writer, ROLE_ADMIN)
+    connection_manager.register(admin_id, writer, ROLE_ADMIN)
+    if watching is not None:
+        watch.set_watch(admin_id, watching)
     return writer
 
 
@@ -318,3 +337,145 @@ async def test_a_transient_broadcast_stays_connected_only():
     await broadcast_command(MSG_TERMINATE_PROCESS, {})
 
     assert database.get_command_history(CLIENT) == []
+
+
+# ---------------------------------------------------------------------------
+# Watch subscriptions — who receives telemetry, and who samples fast
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_telemetry_reaches_only_the_admins_watching_that_client():
+    """The fan-out D5 describes: every console used to get every client's data."""
+    watching = _connect_admin(admin_id="admin-watching", watching=CLIENT)
+    elsewhere = _connect_admin(admin_id="admin-elsewhere", watching="pc-99")
+    idle = _connect_admin(admin_id="admin-idle", watching=None)
+
+    await process_message(
+        CLIENT, ROLE_CLIENT, create_message(MSG_APP_DATA, {"applications": []})
+    )
+
+    assert [m["type"] for m in watching.sent] == [MSG_APP_DATA]
+    assert elsewhere.sent == []
+    assert idle.sent == []
+
+
+@pytest.mark.asyncio
+async def test_an_unwatched_sample_is_still_recorded():
+    """Scoping decides what reaches a screen. It never decides what is kept."""
+    database.store_client(CLIENT, "host", "127.0.0.1", "Windows")
+    _connect_admin(watching=None)
+
+    await process_message(
+        CLIENT,
+        ROLE_CLIENT,
+        create_message(MSG_APP_DATA, {"applications": [{"process_name": "chrome.exe"}]}),
+    )
+
+    assert database.get_client_apps(CLIENT) != []
+
+
+@pytest.mark.asyncio
+async def test_watching_a_client_asks_it_to_sample_fast():
+    client_writer = _capturing_writer()
+    connection_manager.register(CLIENT, client_writer, ROLE_CLIENT)
+    connection_manager.register(ADMIN, _capturing_writer(), ROLE_ADMIN)
+
+    await process_message(
+        ADMIN, ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": CLIENT})
+    )
+
+    sent = [m for m in client_writer.sent if m["type"] == MSG_SET_SAMPLE_RATE]
+    assert len(sent) == 1
+    assert sent[0]["payload"]["fast"] is True
+    assert sent[0]["payload"]["ttl"] == WATCH_TTL
+
+
+@pytest.mark.asyncio
+async def test_the_last_watcher_leaving_returns_the_client_to_its_recording_rate():
+    """Two consoles on one machine must not fight over its sample rate."""
+    client_writer = _capturing_writer()
+    connection_manager.register(CLIENT, client_writer, ROLE_CLIENT)
+    connection_manager.register(ADMIN, _capturing_writer(), ROLE_ADMIN)
+    connection_manager.register("admin-02", _capturing_writer(), ROLE_ADMIN)
+
+    for admin_id in (ADMIN, "admin-02"):
+        await process_message(
+            admin_id, ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": CLIENT})
+        )
+
+    # The first one leaving changes nothing: somebody is still looking.
+    await process_message(ADMIN, ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": ""}))
+    assert [m["payload"]["fast"] for m in client_writer.sent] == [True, True]
+
+    await process_message(
+        "admin-02", ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": ""})
+    )
+    assert [m["payload"]["fast"] for m in client_writer.sent] == [True, True, False]
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_selection_of_the_same_client_costs_nothing():
+    """QML re-setting a property must not spam the client with rate changes."""
+    client_writer = _capturing_writer()
+    connection_manager.register(CLIENT, client_writer, ROLE_CLIENT)
+    connection_manager.register(ADMIN, _capturing_writer(), ROLE_ADMIN)
+
+    for _ in range(3):
+        await process_message(
+            ADMIN, ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": CLIENT})
+        )
+
+    assert len(client_writer.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_departing_admin_releases_its_client():
+    """A console that closes must not hold a machine at three-second sampling."""
+    client_writer = _capturing_writer()
+    connection_manager.register(CLIENT, client_writer, ROLE_CLIENT)
+    connection_manager.register(ADMIN, _capturing_writer(), ROLE_ADMIN)
+
+    await process_message(
+        ADMIN, ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": CLIENT})
+    )
+    await release_watches(ADMIN)
+
+    assert [m["payload"]["fast"] for m in client_writer.sent] == [True, False]
+    assert watch.watchers_of(CLIENT) == []
+
+
+@pytest.mark.asyncio
+async def test_a_watch_on_an_offline_client_is_not_queued_for_later():
+    """SET_SAMPLE_RATE is point-in-time: replaying it serves nobody.
+
+    The operator who selected the machine will be long gone by the time it
+    reconnects, which is exactly why it is absent from DURABLE_COMMANDS.
+    """
+    database.store_client(CLIENT, "host", "127.0.0.1", "Windows")
+    connection_manager.register(ADMIN, _capturing_writer(), ROLE_ADMIN)
+
+    await process_message(
+        ADMIN, ROLE_ADMIN, create_message(MSG_WATCH, {"client_id": CLIENT})
+    )
+
+    queued = [
+        row for row in database.get_command_history(CLIENT)
+        if row["status"] == database.COMMAND_QUEUED
+    ]
+    assert queued == []
+
+
+@pytest.mark.asyncio
+async def test_renewal_only_touches_watched_clients():
+    """The TTL is the net for a dead Engine; renewal is what keeps a live one honest."""
+    watched = _capturing_writer()
+    unwatched = _capturing_writer()
+    connection_manager.register(CLIENT, watched, ROLE_CLIENT)
+    connection_manager.register("pc-02", unwatched, ROLE_CLIENT)
+    watch.set_watch(ADMIN, CLIENT)
+
+    await renew_watches()
+
+    assert [m["payload"]["fast"] for m in watched.sent] == [True]
+    assert unwatched.sent == []

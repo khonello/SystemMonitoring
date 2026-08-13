@@ -106,6 +106,11 @@ class Route(NamedTuple):
         handler: Bespoke step for routes that need one, called with the
             Context and payload.
         relay_to: Role to forward the message on to, unchanged.
+        relay_targets: Optional resolver from the sender's id to the exact peer
+            ids that should receive the relay. Used by telemetry so a client's
+            data reaches the admins watching it rather than all of them. Absent
+            means every peer of `relay_to`, which stays right for anything an
+            operator needs regardless of what they have selected.
     """
 
     flow: str
@@ -113,6 +118,7 @@ class Route(NamedTuple):
     persist: PersistFn | None = None
     handler: Handler | None = None
     relay_to: str | None = None
+    relay_targets: Callable[[str], list[str]] | None = None
 
 
 CLIENTS: frozenset[str] = frozenset({ROLE_CLIENT})
@@ -139,8 +145,15 @@ async def relay(
     payload: dict[str, Any],
     role: str,
     trace_id: str,
+    targets: list[str] | None = None,
 ) -> int:
-    """Forward a message to every peer of `role`. Returns how many received it.
+    """Forward a message to peers of `role`. Returns how many received it.
+
+    `targets` narrows the fan-out to an explicit set — used by the telemetry
+    routes to reach only the admins watching this client, rather than every
+    console connected (`issues.md` D5). Absent, every peer of the role gets it,
+    which is still right for anything an operator needs whether or not they
+    happen to have that machine selected.
 
     Failures are counted and logged rather than discarded. Previously this
     ignored the result of every send, so an admin whose socket had gone away
@@ -149,7 +162,23 @@ async def relay(
     """
     message = create_message(msg_type, payload, client_id=source_id, trace_id=trace_id)
 
-    targets = connection_manager.get_peer_ids(role)
+    if targets is None:
+        targets = connection_manager.get_peer_ids(role)
+    else:
+        # A watcher that has since disconnected is not an error worth logging as
+        # a relay failure: it is a stale subscription, and clear_watch tidies it
+        # on disconnect anyway. Filtering here keeps the failure count meaning
+        # "a live peer did not receive this".
+        connected = set(connection_manager.get_peer_ids(role))
+        targets = [peer for peer in targets if peer in connected]
+
+    if not targets:
+        logger.debug(
+            "[%s] %s from %s relayed to nobody: no %s peer is watching it",
+            trace_id, msg_type, source_id, role,
+        )
+        return 0
+
     failed: list[str] = []
     for peer_id in targets:
         if not await send_to_peer(peer_id, message):
@@ -234,4 +263,5 @@ async def dispatch(
         await route.handler(context, payload)
 
     if route.relay_to is not None:
-        await relay(msg_type, peer_id, payload, route.relay_to, trace_id)
+        targets = route.relay_targets(peer_id) if route.relay_targets else None
+        await relay(msg_type, peer_id, payload, route.relay_to, trace_id, targets)

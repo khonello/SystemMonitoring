@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from engine import database
+from client import sampling
+from engine import database, watch
 from engine import main as engine_main
 
 
@@ -41,6 +42,35 @@ def fresh_shutdown_event():
     engine_main.reset_shutdown()
     yield
     engine_main.reset_shutdown()
+
+
+@pytest.fixture(autouse=True)
+def empty_watch_registry():
+    """Start every test with nobody watching anything.
+
+    engine.watch keeps its subscriptions in a module global, like
+    connection_manager's registries. A leaked entry is quiet and nasty: the
+    telemetry routes ask it who should receive a relay, so a stale watcher from
+    an earlier test makes a later one either fan out to a peer that no longer
+    exists or, worse, pass because somebody else's subscription happened to
+    cover it.
+    """
+    watch.reset()
+    yield
+    watch.reset()
+
+
+@pytest.fixture(autouse=True)
+def unwatched_sampling():
+    """Reset the client agent's fast-sampling deadline between tests.
+
+    client.sampling holds one monotonic deadline in a module global. A test that
+    puts the agent into fast mode would otherwise shorten the collection
+    intervals of every test after it, for up to WATCH_TTL of wall clock.
+    """
+    sampling.reset()
+    yield
+    sampling.reset()
 
 
 @pytest.fixture(autouse=True)

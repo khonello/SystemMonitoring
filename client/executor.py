@@ -21,7 +21,7 @@ from typing import Any
 
 import psutil
 
-from client import connection, lockout, policy
+from client import connection, lockout, policy, sampling
 from client.config import BUNDLED_PYTHON_PATH, CLIENT_ID, SCRIPT_LOG_DIR
 from common.constants import (
     DEFAULT_SCRIPT_TIMEOUT,
@@ -36,6 +36,7 @@ from common.constants import (
     MSG_SCREEN_CAPTURE,
     MSG_SET_APP_BLACKLIST,
     MSG_SET_PAUSE,
+    MSG_SET_SAMPLE_RATE,
     MSG_SET_TIME_RESTRICTION,
     MSG_SET_WEBSITE_POLICY,
     MSG_SHOW_DIALOG,
@@ -618,6 +619,13 @@ async def _run_command(command_type: str, payload: dict[str, Any]) -> dict[str, 
 
     if command_type == MSG_SET_PAUSE:
         return await asyncio.to_thread(lockout.apply_pause_command, payload)
+
+    # Purely local and instant: it sets a deadline the collection loops read
+    # on their next pass. No thread, nothing to wait on, and nothing written
+    # to disk -- fast sampling must not survive a restart, because the
+    # operator who asked for it will not have.
+    if command_type == MSG_SET_SAMPLE_RATE:
+        return sampling.apply_command(payload)
 
     if command_type == MSG_SHOW_DIALOG:
         return await show_dialog(

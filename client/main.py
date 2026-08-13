@@ -13,7 +13,7 @@ import asyncio
 import logging
 import sys
 
-from client import connection, lockout, policy, session, single_instance
+from client import connection, lockout, policy, sampling, session, single_instance
 from client.config import (
     CLIENT_ID,
     ENGINE_HOST,
@@ -65,7 +65,10 @@ async def monitoring_loop() -> None:
         except Exception:
             logger.exception("Monitoring cycle failed")
 
-        await _sleep_or_stop(MONITOR_INTERVAL)
+        # Read each pass, not captured once: an operator selecting this
+        # machine in the console shortens it, and deselecting -- or simply
+        # going away, via the TTL -- puts it back.
+        await _sleep_or_stop(sampling.app_interval())
 
 
 async def network_loop() -> None:
@@ -79,7 +82,7 @@ async def network_loop() -> None:
         except Exception:
             logger.exception("Network cycle failed")
 
-        await _sleep_or_stop(NETWORK_INTERVAL)
+        await _sleep_or_stop(sampling.network_interval())
 
 
 async def heartbeat_loop() -> None:

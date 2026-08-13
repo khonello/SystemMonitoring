@@ -178,6 +178,14 @@ async def test_monitoring_data_is_relayed_to_admins(admin):
     assert await client_connection.connect(HOST, port)
     try:
         assert await client_connection.register()
+
+        # Selection is the subscription: telemetry reaches the admins watching
+        # that client, not every console connected (issues.md D5). The pause is
+        # for the Engine to process this before the sample arrives — they are
+        # two sockets, so nothing orders them for us.
+        assert await connection.declare_watch(CLIENT_ID)
+        await asyncio.sleep(0.2)
+
         await client_connection.send(
             create_message(
                 "APP_DATA",
@@ -189,6 +197,39 @@ async def test_monitoring_data_is_relayed_to_admins(admin):
 
         assert message["client_id"] == CLIENT_ID
         assert message["payload"]["applications"][0]["process_name"] == "chrome.exe"
+    finally:
+        await client_connection.close()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_does_not_reach_an_admin_watching_nobody(admin):
+    """The fan-out this replaced pushed every client's data to every console.
+
+    An admin that has selected nothing has nothing on screen to update, so it
+    receives no telemetry — at the 50-client ceiling the old behaviour was
+    roughly 4,000 application rows every 30 seconds to each console for nothing
+    (issues.md D5). What is *recorded* is unaffected, which the assertion on the
+    database is there to state rather than imply.
+    """
+    connection, received, port = admin
+
+    from client import connection as client_connection
+    from client.config import CLIENT_ID
+
+    assert await client_connection.connect(HOST, port)
+    try:
+        assert await client_connection.register()
+        await client_connection.send(
+            create_message(
+                "APP_DATA",
+                {"applications": [{"process_name": "chrome.exe", "pid": 42}]},
+                client_id=CLIENT_ID,
+            )
+        )
+        await asyncio.sleep(0.4)
+
+        assert [m for m in received if m.get("type") == "APP_DATA"] == []
+        assert database.get_client_apps(CLIENT_ID) != []
     finally:
         await client_connection.close()
 
@@ -582,9 +623,18 @@ class _RecordingConnection:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, list[str], dict]] = []
+        # Selecting a client now declares a watch, so the stub has to model the
+        # part of the interface that involves: whether it is connected, and the
+        # declaration itself.
+        self.connected = True
+        self.watched: list[str] = []
 
     async def send_command(self, command_type, target_clients, parameters=None):
         self.sent.append((command_type, list(target_clients), parameters or {}))
+        return True
+
+    async def declare_watch(self, client_id):
+        self.watched.append(client_id)
         return True
 
 

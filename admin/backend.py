@@ -147,6 +147,16 @@ class Backend(QObject):
             return
         self._selected_client = client_id
         self._refresh_live_models()
+
+        # Selection IS the subscription (issues.md C19). Telling the Engine what
+        # this console is watching does two things at once: its telemetry is
+        # relayed here instead of to every admin, and the machine speeds up its
+        # sampling so the view is live rather than a report every half minute.
+        # Deselecting matters as much as selecting -- it is what lets the client
+        # go back to its recording intervals.
+        if self._connection is not None and self._connection.connected:
+            asyncio.ensure_future(self._connection.declare_watch(client_id))
+
         self.selectedClientChanged.emit(client_id)
 
     selectedClient = Property(
@@ -181,6 +191,15 @@ class Backend(QObject):
             self._set_connected(True)
             self._set_status(f"Connected to {host}:{port} as {ADMIN_ID}")
             await self._connection.request_client_list()
+
+            # Re-declare after a reconnect. The Engine forgets a console's
+            # subscription the moment its socket goes -- deliberately, so a
+            # departed operator cannot hold a machine at fast sampling -- so a
+            # selection that survived on this side has to be stated again, or
+            # the roster would show a selected client that quietly sends here
+            # no longer.
+            if self._selected_client:
+                await self._connection.declare_watch(self._selected_client)
         else:
             self._set_connected(False)
             self._set_status(f"Could not connect to {host}:{port}")
