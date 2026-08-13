@@ -518,6 +518,7 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 |---|---|---|
 | Keyboard does nothing at the boot prompt; VM falls through to PXE or "boot failed" | VMConnect renders only once attached, so opening the window after starting the VM means the 5-second prompt already expired | Console open **first**, click inside, then *Action → Start*, tapping space throughout |
 | *View → Enhanced Session* greyed out | Normal with no guest OS — it needs RDP inside the guest | Not your problem. Ignore it |
+| A guest's console is entirely black and looks hung | Usually the guest blanked its display after idle. Hyper-V's synthetic video reports that as a black framebuffer, which is indistinguishable from a hang by eye | Click into the console and tap **Shift** or **Ctrl** — a modifier wakes it without typing into whatever has focus. **Before assuming a hang, ask the host**: `Get-VMIntegrationService -VMName <vm>` (Heartbeat `OK` means something in the guest is still answering) and `(Get-VM <vm>).CPUUsage` (a hang sits at 0% or pegs at 100%; ordinary work is in between) |
 | `Get-VM` says `Running` but nothing responds | Same as the first row | As above |
 | Windows Setup refuses: "This PC can't run Windows 11" | TPM off. Gen 2 VMs have a virtual one but it is off by default and the wizard never offers it | `setup_lab_vms.ps1` enables it. By hand: *Settings → Security → Enable TPM*, VM off |
 | Debian won't boot at all | Secure Boot template defaults to *MicrosoftWindows* | Template must be **MicrosoftUEFICertificateAuthority**, or off |
