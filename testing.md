@@ -288,6 +288,8 @@ change to the code or the scripts, and mount it on the host to confirm before
 attaching it — the stale-disc symptom points at the guest, which is the wrong
 place to look.
 
+**Bootstrapping and iterating are different problems, and the disc only solves the first well.** Building a machine from nothing is what it is for; pushing a code change to a lab that is already running is what it is bad at, because replacing the backing file makes Hyper-V re-evaluate every attachment and the medium can drop out from under a guest that had it mounted. `LAB-SETUP.md` carries the update loop and the recovery procedure. Once the lab is networked the honest answer is to stop using the disc for updates: the Engine has sshd and a fixed address, so `scp` reaches it without any of this.
+
 Attaching is a **swap**, not an addition: each VM has one DVD drive, so
 `Set-VMDvdDrive` replaces whatever is loaded (`Add-VMDvdDrive` would add a
 second, which nothing here needs). For LabEngine that drive holds the Debian

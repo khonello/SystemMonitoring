@@ -177,6 +177,74 @@ What it does under the hood, and why:
 > build script's final step exists for exactly that second case — it hashes the
 > file on the disc against the working copy rather than trusting the copy.
 
+### Updating a lab that is already running
+
+Steps 1–10 build the lab once. This is the loop you actually spend time in
+afterwards, when the code has changed and both guests need it — and it is worth
+separating, because **the disc was designed for bootstrapping, not for
+iterating**, and using it as an update channel is where every awkward moment in
+this section comes from.
+
+**The realistic pathway, in order:**
+
+1. **Host** — cut and attach in one command:
+
+   ```powershell
+   .\scripts\build_repo_iso.ps1 -AttachTo LabEngine,LabClient
+   ```
+
+   It ejects, copies, attaches, then waits and re-checks that the media is still
+   there. Wait for `still attached after settling` before touching the guests.
+
+2. **Move promptly.** There is a window here. Replacing the backing file makes
+   Hyper-V re-evaluate the attachment, and a drive that verified as `ISO` can
+   fall to `None` shortly afterwards — the settle check catches the common case,
+   but the medium is most reliable in the first minute after it settles. If you
+   walk away and come back an hour later, **check before assuming**:
+
+   ```powershell
+   Get-VMDvdDrive -VMName LabEngine | Format-List Path, DvdMediaType
+   ```
+
+3. **LabEngine** — mount, refresh, restart:
+
+   ```sh
+   su -
+   mount -o ro /dev/sr0 /mnt
+   REFRESH=1 sh /mnt/scripts/lab_engine_setup.sh
+   exit
+   cd /opt/SystemMonitoring && ENGINE_LOG_LEVEL=DEBUG python3 -m engine
+   ```
+
+   `REFRESH=1` **replaces** the tree rather than merging into it, so a file
+   deleted upstream stops existing here too — and it preserves `monitoring.db`,
+   since a code update should not quietly discard the record. `exit` back to
+   `lab` before starting the Engine: running it as root leaves root-owned
+   journal files behind that `lab` then cannot write.
+
+4. **LabClient** — copy, clear the CD read-only flag, restart the agent:
+
+   ```powershell
+   Copy-Item D:\* C:\SystemMonitoring -Recurse -Force
+   Get-ChildItem C:\SystemMonitoring -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
+   cd C:\SystemMonitoring
+   .\environ\Scripts\python.exe -m client --engine 192.168.100.2
+   ```
+
+   The venv (`environ` on this build) is not on the disc, so the copy leaves it
+   alone. The `IsReadOnly` sweep matters: files off a CD keep that attribute and
+   the agent writes inside its own tree.
+
+5. **`umount /mnt` on LabEngine when you are done**, before the next re-cut.
+   Linux holds the medium while it is mounted, and the host cannot take it back.
+
+**A better loop, once the lab is networked.** LabEngine has `sshd` and a fixed
+address, so `scp -r` from the host updates it with no disc, no eject, no
+`umount` and nothing typed in the guest. The ISO exists for a machine with *no
+network, no account and no tooling* — true when you are building, false the
+moment the lab is up. If you find yourself re-cutting discs repeatedly in one
+session, that is the signal to switch.
+
 ### When the disc disappears from a guest
 
 This will happen while you are iterating, and it is worth knowing cold, because
