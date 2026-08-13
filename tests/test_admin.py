@@ -23,6 +23,7 @@ from admin.validation import (
     validate_script,
 )
 from common.constants import (
+    MSG_COMMAND_RESPONSE,
     MAX_BLOCK_HOURS,
     MSG_SET_APP_BLACKLIST,
     MSG_SET_TIME_RESTRICTION,
@@ -805,3 +806,93 @@ async def test_the_app_blacklist_requires_a_selected_client():
 
     assert connection.sent == []
     assert "Select a client" in backend.status
+
+
+# ---------------------------------------------------------------------------
+# Screen captures — they used to arrive and go nowhere
+# ---------------------------------------------------------------------------
+
+
+def test_a_returned_capture_is_written_to_disk(tmp_path, monkeypatch):
+    """The client encodes a screenshot; something has to decode it.
+
+    Before this, image_base64 arrived in an ordinary COMMAND_RESPONSE and was
+    dropped on the floor: the operator saw "Captured 1920x1080 (245 KB)" and
+    had no picture and no file. A feature that reports success and produces
+    nothing is worse than one that fails.
+    """
+    import base64
+
+    from admin import backend as backend_module
+
+    monkeypatch.setattr(backend_module, "CAPTURE_DIR", tmp_path)
+    backend = Backend()
+
+    pixel = base64.b64encode(b"\xff\xd8\xff\xd9").decode()
+    backend._handle_command_response(
+        create_message(
+            MSG_COMMAND_RESPONSE,
+            {
+                "command_id": "cmd-1",
+                "status": "success",
+                "message": "Captured 800x600 (12 KB)",
+                "image_base64": pixel,
+                "format": "jpeg",
+            },
+            client_id="pc-01",
+        )
+    )
+
+    written = list(tmp_path.glob("pc-01-*.jpeg"))
+    assert len(written) == 1
+    assert written[0].read_bytes() == b"\xff\xd8\xff\xd9"
+
+
+def test_a_capture_from_an_awkward_client_id_stays_inside_the_capture_dir(tmp_path, monkeypatch):
+    """client_id reaches a filename, and it is peer-supplied text."""
+    import base64
+
+    from admin import backend as backend_module
+
+    monkeypatch.setattr(backend_module, "CAPTURE_DIR", tmp_path)
+    backend = Backend()
+
+    backend._handle_command_response(
+        create_message(
+            MSG_COMMAND_RESPONSE,
+            {
+                "command_id": "cmd-1",
+                "status": "success",
+                "image_base64": base64.b64encode(b"x").decode(),
+                "format": "jpeg",
+            },
+            client_id="../../etc/passwd",
+        )
+    )
+
+    written = list(tmp_path.glob("*.jpeg"))
+    assert len(written) == 1
+    assert written[0].parent == tmp_path
+
+
+def test_a_corrupt_capture_is_reported_rather_than_crashing(tmp_path, monkeypatch, caplog):
+    import logging as _logging
+
+    from admin import backend as backend_module
+
+    monkeypatch.setattr(backend_module, "CAPTURE_DIR", tmp_path)
+    backend = Backend()
+
+    with caplog.at_level(_logging.ERROR, logger="admin.backend"):
+        backend._handle_command_response(
+            create_message(
+                MSG_COMMAND_RESPONSE,
+                {"command_id": "c", "status": "success", "image_base64": "not base64!!"},
+                client_id="pc-01",
+            )
+        )
+
+    # Not glob("*"): the isolated-database fixture puts test.db in this same
+    # tmp_path, so an empty-directory assertion would be testing that fixture.
+    assert list(tmp_path.glob("*.jpeg")) == []
+    assert "not valid base64" in caplog.text

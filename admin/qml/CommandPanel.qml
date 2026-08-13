@@ -112,14 +112,41 @@ Item {
             }
 
             ScrollView {
+                id: outputScroll
                 SplitView.fillWidth: true
 
+                // Follow the tail as output arrives, the way a log viewer does.
+                // A script can run for minutes and the interesting line is
+                // almost always the last one, so a pane that stays pinned to
+                // the top hides exactly what the operator is waiting for.
+                //
+                // But only while the view is ALREADY at the bottom. Someone who
+                // has scrolled up is reading something, and yanking them back
+                // on the next chunk makes long output impossible to follow.
                 TextArea {
                     id: outputView
                     readOnly: true
                     wrapMode: TextEdit.NoWrap
                     font.family: "Consolas, monospace"
                     placeholderText: "Script output appears here as it arrives"
+
+                    property bool following: true
+
+                    onTextChanged: if (following) Qt.callLater(outputScroll.toBottom)
+                }
+
+                function toBottom() {
+                    const bar = ScrollBar.vertical
+                    if (bar) { bar.position = Math.max(0, 1.0 - bar.size) }
+                }
+
+                // Re-arm as soon as the operator returns to the bottom, so
+                // following is the resting state rather than something you have
+                // to ask for again.
+                ScrollBar.vertical.onPositionChanged: {
+                    const bar = ScrollBar.vertical
+                    outputView.following = bar.size >= 1.0 ||
+                                           bar.position >= 1.0 - bar.size - 0.01
                 }
             }
         }

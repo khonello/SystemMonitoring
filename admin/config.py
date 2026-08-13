@@ -44,6 +44,14 @@ MAX_LIVE_SAMPLES: Final[int] = 200
 SETTINGS_HOST: Final[str] = "engine/host"
 SETTINGS_PORT: Final[str] = "engine/port"
 
+# Where returned screen captures are written. Operator output, so it lives with
+# the operator's own files rather than in the repository -- a console run from a
+# read-only install directory must still be able to save one, and captures are
+# not source. Overridable for anyone who wants them somewhere specific.
+CAPTURE_DIR: Final[Path] = Path(
+    os.environ.get("ADMIN_CAPTURE_DIR", Path.home() / "LabMonitor" / "captures")
+)
+
 # --- TLS -------------------------------------------------------------------
 #
 # Same pinned Engine certificate the Client Agent uses. Presence-based, so an

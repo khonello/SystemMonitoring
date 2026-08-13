@@ -249,8 +249,56 @@ ApplicationWindow {
         }
     }
 
+    // A screen capture used to arrive, be reported as "Captured 1920x1080", and
+    // then go nowhere at all — the operator was told it worked and given
+    // nothing to look at. It is now written to disk and shown here.
+    Dialog {
+        id: captureDialog
+
+        property string path: ""
+        property string client: ""
+
+        anchors.centerIn: parent
+        width: Math.min(window.width - 120, 1100)
+        height: Math.min(window.height - 120, 800)
+        modal: true
+        standardButtons: Dialog.Close
+        title: "Screen capture - " + captureDialog.client
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+
+            Image {
+                source: captureDialog.path ? "file:///" + captureDialog.path : ""
+                fillMode: Image.PreserveAspectFit
+                // Decoded at display size rather than full resolution: a 4K
+                // screenshot held at native size is a lot of memory for a
+                // preview nobody zooms into.
+                sourceSize.width: 1600
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+            }
+
+            // The path is selectable because the useful thing to do with a
+            // capture is usually to attach it to something else.
+            TextField {
+                text: captureDialog.path
+                readOnly: true
+                Layout.fillWidth: true
+                font.pixelSize: 11
+            }
+        }
+    }
+
     Connections {
         target: backend
+
+        function onCaptureReady(path, clientId) {
+            captureDialog.path = path
+            captureDialog.client = clientId
+            captureDialog.open()
+        }
 
         function onValidationFailed(message) {
             validationDialog.detail = message

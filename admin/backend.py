@@ -13,13 +13,16 @@ schedules a task via asyncio.ensure_future and returns immediately.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
-from admin.config import ADMIN_ID, MAX_LIVE_SAMPLES
+from admin.config import ADMIN_ID, CAPTURE_DIR, MAX_LIVE_SAMPLES
 from admin.connection import EngineConnection
 from admin.models import (
     ApplicationModel,
@@ -77,6 +80,7 @@ class Backend(QObject):
     reportReady = Signal(str)                 # report kind
     pauseExpiring = Signal(str, int)          # client_id, seconds remaining
     scriptChecked = Signal(str, bool)         # human-readable summary, passed
+    captureReady = Signal(str, str)           # saved file path, client_id
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -618,8 +622,51 @@ class Backend(QObject):
         command_id = payload.get("command_id", "")
         status = payload.get("status", "")
         text = payload.get("message") or payload.get("result") or ""
+
+        # A screen capture arrives here as base64 in an otherwise ordinary
+        # response. Nothing consumed it before, so the operator got
+        # "Captured 1920x1080 (245 KB)" and no picture -- a feature that looks
+        # like it worked and produces nothing you can look at.
+        if payload.get("image_base64"):
+            saved = self._save_capture(message.get("client_id", ""), payload)
+            if saved is not None:
+                text = f"{text} - saved to {saved}"
+                self.captureReady.emit(str(saved), message.get("client_id", ""))
+
         self.commandFinished.emit(command_id, status, str(text))
         self._set_status(f"{message.get('client_id', '')}: {status} {text}".strip())
+
+    def _save_capture(self, client_id: str, payload: dict[str, Any]) -> Path | None:
+        """Write a returned screenshot to disk. Returns the path, or None.
+
+        Saved rather than held in memory: a screenshot is evidence an operator
+        may want to keep, attach to a note, or show to someone who is not
+        sitting here. It is written under the Admin's own directory rather than
+        into the repository, because it is operator output, not source.
+
+        The client is named in the filename, not just the timestamp — a folder
+        of captures from several machines is otherwise unreadable.
+        """
+        try:
+            raw = base64.b64decode(payload["image_base64"], validate=True)
+        except (KeyError, ValueError, TypeError) as exc:
+            logger.error("Screen capture from %s was not valid base64: %s", client_id, exc)
+            return None
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        safe_client = re.sub(r"[^A-Za-z0-9._-]", "_", client_id or "unknown")
+        extension = str(payload.get("format", "jpeg")).lower()
+        path = CAPTURE_DIR / f"{safe_client}-{stamp}.{extension}"
+
+        try:
+            CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        except OSError as exc:
+            logger.error("Could not write capture to %s: %s", path, exc)
+            return None
+
+        logger.info("Saved %d KB capture from %s to %s", len(raw) // 1024, client_id, path)
+        return path
 
     def _handle_command_accepted(self, message: dict[str, Any]) -> None:
         payload = get_payload(message)
