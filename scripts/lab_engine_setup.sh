@@ -40,7 +40,9 @@ run()   { if [ "$DRY_RUN" = "1" ]; then return 0; fi; "$@"; }
 
 say 'Checking preconditions'
 
-[ "$(id -u)" -eq 0 ] || { echo 'Not root. Re-run with sudo.' >&2; exit 1; }
+# Not "re-run with sudo": setting a root password during the install is exactly
+# what stops Debian from installing sudo at all, so on this VM there is none.
+[ "$(id -u)" -eq 0 ] || { echo 'Not root. Run "su -" first (this VM has no sudo -- Debian only installs it when the root password is left blank), then re-run this script.' >&2; exit 1; }
 ok 'running as root'
 
 if [ -r /etc/os-release ]; then

@@ -314,6 +314,30 @@ would walk back into the installer instead of the system you just built.
 
 ## 8. In the VM — provision the Engine
 
+**There is no `sudo` on this VM.** Debian installs `sudo`, and puts the first
+user in its group, *only when the root password is left blank* at install. We
+set one (step 7), so `sudo` is genuinely not there — `sudo: command not found`
+is correct behaviour, not a broken install. Become root instead:
+
+```sh
+su -
+```
+
+The `-` matters: it loads root's environment, including `/usr/sbin` on `PATH`,
+which is where `mount` lives. Everything in this step runs as root, so drop
+`sudo` from any command you are copying from elsewhere.
+
+**Fix the keyboard first if `|` does not type as `|`.** The install offers a US
+layout by default, and if your keyboard has the extra key to the left of Z (UK
+and most European layouts, keycode 86) the US console keymap gives you `<` and
+`>` from it — so a pipe silently becomes a redirect, which fails as a *different*
+command rather than an error. As root:
+
+```sh
+dpkg-reconfigure keyboard-configuration     # model: Generic 105-key PC, layout: your actual one
+setupcon                                    # applies it without a reboot
+```
+
 Linux does not mount discs by itself without a desktop, so mount it by hand. The
 DVD drive is `/dev/sr0`; `-o ro` is explicit because the medium is read-only and
 a read-write attempt just fails less clearly:
@@ -404,6 +428,8 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 | The Debian installer is sluggish, or its window is awkward over VMConnect | *Graphical install* was chosen at the GRUB menu | Reboot the VM and take plain **Install**. Nothing in this build needs the GTK installer |
 | *Select and install software* is retrieving **1000+ files** | A desktop is being installed. Enter on the tasksel page **accepts what is ticked** — it does not toggle the highlighted line, and the desktop entries are ticked by default | Power off and redo the install. ~8 minutes, versus untangling a desktop from an 8 GB disk. A minimal install retrieves a few hundred files, not thousands — that count is the tell |
 | Tempted to `apt purge` the desktop instead of reinstalling | A purged desktop task leaves residue, and `gdm` will have been enabled on a headless box | Reinstall. The VM holds nothing yet — the repo arrives at step 8, after this |
+| `sudo: command not found` in LabEngine | Debian installs `sudo` **only** when the root password is left blank at install. We set one | `su -` (with the dash, for root's `PATH`). Nothing here needs `sudo` installed |
+| `\|` types as `>` and `\` types as `<` in the guest console | Keyboard has the extra key left of Z (keycode 86, UK/European); the US console keymap gives `<`/`>` from it. A pipe becomes a redirect, so the command *runs* and fails as something else | As root: `dpkg-reconfigure keyboard-configuration`, pick your real layout, then `setupcon` |
 | OOBE loops back to "choose country or region" forever | Trimmed/debloated media — OOBE completion is never recorded | Use **stock** media. `issues.md` D9 |
 | `OOBEMSAHELLO` / `OOBELOCALHELLO`, "Something went wrong" | Windows Hello components stripped from trimmed media | Click **Skip**. Or use stock media and it doesn't happen |
 | "Type a different user name" for `lab` | The account already exists from a previous OOBE pass | Symptom of the loop above, not a naming problem |

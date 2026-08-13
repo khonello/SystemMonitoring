@@ -895,9 +895,38 @@ which is when nothing else can. That is how the low-memory banner above was
 found: the screen it produced looked like expert mode, and the four words naming
 the real cause were in the top-left corner.
 
+**Two things about the freshly installed guest that surprise people, both
+consequences of choices made a screen or two earlier:**
+
+- **No `sudo`.** Debian installs it, and adds the first user to its group, only
+  when the root password is left blank. Setting one — which this build does — is
+  precisely what leaves the system without it. `su -` is the answer, with the
+  dash, so root's `PATH` includes `/usr/sbin` where `mount` lives.
+- **The console keymap is whatever the installer was told**, which is a US
+  default. On a keyboard with the extra key to the left of Z (UK and most
+  European layouts, keycode 86) the US map yields `<` and `>` from it, so `|`
+  types as `>`. That is worse than a dead key: a pipe becomes a redirect, the
+  shell runs a *different valid command*, and the error that surfaces belongs to
+  something else entirely. `dpkg-reconfigure keyboard-configuration` then
+  `setupcon` fixes it live.
+
+**Verifying the install is actually minimal**, before trusting anything built on
+top of it — `df -h /` and a package count:
+
+```sh
+df -h /
+dpkg -l > /tmp/p; grep -c '^ii' /tmp/p
+```
+
+**~1.2 GB used and ~313 packages** is what a correct minimal install looks like
+here (measured 2026-08-13). A desktop that slipped through tasksel shows as 4–5
+GB and comfortably over 1500 packages, so this settles the question in two
+commands rather than by inspection. Note the pipe-free form: it is the check you
+reach for *before* the keymap is fixed.
+
 **Provisioning, in order:**
 
-1. `sudo apt install python3` — the whole dependency list. The Engine imports
+1. `apt install python3` — the whole dependency list. The Engine imports
    only the standard library.
 2. **`python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`.** Do this
    before anything else. The Engine owns all persistence through SQLite, and it

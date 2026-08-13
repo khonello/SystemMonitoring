@@ -460,7 +460,9 @@ Step 'Done. What is left, in order:'
 
   ENGINE VM  ($EngineName)
     1. Install Debian. DESELECT EVERYTHING in tasksel -- no desktop.
-    2. sudo apt install python3
+    2. su -   (there is NO sudo: Debian installs it only when the root
+              password is left blank, and this build sets one)
+       apt install python3
     3. python3 -c "import sqlite3; print(sqlite3.sqlite_version)"
     4. Copy the repository in -- again, COPY, not git clone (certs/, 0.4).
        Nothing to pip install; run from the repo root so common/ resolves.
