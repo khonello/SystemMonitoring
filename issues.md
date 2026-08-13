@@ -1165,6 +1165,50 @@ demonstration:
    any length of time. The item that changes what the defence looks like
    outranks the item that changes what a deployment would need.
 
+### C18. Selecting a client shows empty Applications / Network / USB tabs
+
+**Found during Phase 5 T5.2, 2026-08-13, on the real lab.** An operator selects
+the connected client, opens *Applications*, and sees nothing — while the Engine
+log is visibly relaying `APP_DATA ... to 1 admin peers`. Nothing is broken, and
+that is the problem: the behaviour is correct and reads as a failure.
+
+**Why it happens.** Those three tabs are *live* views. They are fed from
+in-memory caches (`_live_apps`, `_live_usb`, `_live_network` in
+`admin/backend.py`), and `_set_selected` only re-filters what is already there
+(`_refresh_live_models`, line 629). Nothing is fetched on selection, so a tab
+holds only telemetry that arrived **after this Admin connected** — and the
+caches are cleared on disconnect. Immediately after connecting, or after any
+Engine restart, every tab is legitimately empty until the next telemetry
+interval elapses, which is up to a minute.
+
+This follows from a design decision that is not in question: the Admin has no
+database, the Engine owns all persistence, and history is served through the
+Reports tab, which does query the Engine (`_REPORT_QUERIES`). The gap is not
+the architecture, it is that the live view gives the operator no way to tell
+"nothing has arrived yet" from "this client reports nothing".
+
+**What would fix it, cheapest first:**
+
+1. An empty-state line in each tab — *"Waiting for the next report from
+   `<client>`; live data only, see Reports for history."* Pure QML, no protocol
+   change, and it removes the ambiguity entirely.
+2. Show the time of the last received sample per tab, so a stale view is
+   visibly stale rather than silently so.
+3. Backfill on selection by issuing the matching report request, so the tab
+   opens populated. More work, and it blurs the live/history split that the
+   Reports tab currently makes clean — worth doing only if the empty state
+   still confuses people after 1 and 2.
+
+**Do this with C17**, not before it: both are Admin presentation work, both are
+QML-only, and the fleet view proposed in C17 changes what "selected client"
+means on screen anyway. Same ordering rule applies — after Phase 5 passes.
+
+**Note for the defence, until it is fixed:** demonstrate history from the
+Reports tab, and expect the live tabs to be empty for the first minute after
+connecting. USB events stay empty in the VM regardless — Hyper-V has no plain
+USB pass-through, which is why `testing.md` runs T2.2 on the host (section D8's
+neighbourhood, and the reason is hardware, not code).
+
 ---
 
 ## D — Accepted limitations
