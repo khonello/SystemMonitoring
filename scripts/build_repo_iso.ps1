@@ -197,6 +197,22 @@ if (-not $DryRun) {
         $onHost = (Get-FileHash (Join-Path $RepoPath 'scripts\lab_engine_setup.sh')).Hash
         if ($onDisc -ne $onHost) { throw 'lab_engine_setup.sh on the disc does not match the working copy.' }
         Ok 'disc matches the working copy'
+
+        # LINE ENDINGS, because this disc crosses an OS boundary. A shell script
+        # with CRLF fails in the guest as `set: Illegal option -`, since dash
+        # reads the carriage return as part of the argument -- an error that
+        # names neither the file nor the real problem. .gitattributes pins these
+        # to LF, but anything that writes a file WITHOUT going through git can
+        # reintroduce them: Python's write_text translates \n to \r\n on Windows,
+        # which is exactly how it happened on 2026-08-13.
+        $crlf = @()
+        foreach ($sh in Get-ChildItem "${letter}:\scripts" -Filter *.sh) {
+            if ([IO.File]::ReadAllBytes($sh.FullName) -contains 13) { $crlf += $sh.Name }
+        }
+        if ($crlf) {
+            throw "CRLF line endings in: $($crlf -join ', '). The guest will fail with 'set: Illegal option -'. Convert to LF before re-cutting."
+        }
+        Ok 'shell scripts are LF, as a Linux guest requires'
     } finally {
         Dismount-DiskImage -ImagePath $tempIso | Out-Null
     }
