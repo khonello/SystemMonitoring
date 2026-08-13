@@ -97,10 +97,33 @@ else
             echo '  Set-VMDvdDrive -VMName LabEngine -Path <lab-drive>:\LabRepo.iso' >&2
             exit 1
         fi
-        mkdir -p /mnt/labrepo "$REPO"
-        mount -o ro /dev/sr0 /mnt/labrepo
-        cp -r /mnt/labrepo/. "$REPO"/
-        umount /mnt/labrepo
+        # REUSE AN EXISTING MOUNT RATHER THAN MAKING A SECOND ONE. You reached
+        # this script by mounting the disc yourself -- LAB-SETUP.md step 8 says
+        # `mount -o ro /dev/sr0 /mnt`, because there is no other way to run a
+        # script that only exists on the disc. An earlier version then did
+        # `mkdir -p /mnt/labrepo`, i.e. created a directory INSIDE the
+        # read-only medium it had just been pointed at, and died with
+        # "Read-only file system" while following our own procedure (2026-08-13).
+        SRC=$(awk '$1 == "/dev/sr0" { print $2; exit }' /proc/mounts)
+        UNMOUNT_AFTER=0
+        if [ -n "$SRC" ]; then
+            have "disc already mounted at $SRC"
+        else
+            # /tmp, never /mnt: /mnt is exactly where a person would have put it.
+            SRC=/tmp/labrepo
+            mkdir -p "$SRC"
+            mount -o ro /dev/sr0 "$SRC"
+            UNMOUNT_AFTER=1
+        fi
+
+        mkdir -p "$REPO"
+        cp -r "$SRC"/. "$REPO"/
+
+        if [ "$UNMOUNT_AFTER" = "1" ]; then
+            umount "$SRC"
+            rmdir "$SRC" 2>/dev/null || true
+        fi
+
         # Files off a CD arrive read-only.
         chmod -R u+w "$REPO"
     fi
