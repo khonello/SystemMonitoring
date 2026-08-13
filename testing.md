@@ -1379,9 +1379,9 @@ Integration should not start until:
 
 | Test | Result | Notes |
 |---|---|---|
-| T0.1 port reachable | | |
-| T1.1 engine --check | | |
-| T1.2 engine serves | | |
+| T0.1 port reachable | **PASS** 2026-08-13 | `TcpTestSucceeded : True`, `192.168.100.3` → `192.168.100.2:5000`, interface `Ethernet`. First contact between the two VMs |
+| T1.1 engine --check | **PASS** 2026-08-13 | Run by `lab_engine_setup.sh` in the guest. Transport `TLS` with `/opt/SystemMonitoring/certs/engine-cert.pem`, authentication *not* BYPASSED, `Database ready. Configuration looks serviceable.` |
+| T1.2 engine serves | **PASS** 2026-08-13 | `Engine listening on ('0.0.0.0', 5000) (max 50 peers)`, `TLS ENABLED - traffic encrypted`, retention sweeping every 21600s. Log also shows `Using selector: EpollSelector` — the Linux-only asyncio design claim, confirmed on the target rather than assumed |
 | T1.3 plaintext refused | | |
 | T1.4 write cost | | |
 | T2.1 collection | | |
