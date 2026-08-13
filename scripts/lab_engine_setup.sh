@@ -31,6 +31,11 @@ STATIC_IP="${STATIC_IP:-192.168.100.2}"
 NETMASK="${NETMASK:-255.255.255.0}"
 HOST_IP="${HOST_IP:-192.168.100.1}"
 DRY_RUN="${DRY_RUN:-0}"
+# REFRESH=1 copies a newer disc over an existing tree. Without it an
+# existing repository is left alone, which is right for provisioning and
+# useless for iterating -- and iterating is what actually happens once the
+# lab is up and the code is still changing.
+REFRESH="${REFRESH:-0}"
 
 say()   { printf '\n%s\n' "$*"; }
 ok()    { printf '  [ok]   %s\n' "$*"; }
@@ -87,8 +92,8 @@ fi
 
 say '2. Repository'
 
-if [ -f "$REPO/pyproject.toml" ]; then
-    have "repository at $REPO"
+if [ -f "$REPO/pyproject.toml" ] && [ "$REFRESH" != "1" ]; then
+    have "repository at $REPO (REFRESH=1 to copy a newer disc over it)"
 else
     # LabRepo.iso, built on the host, is the least fiddly route in -- it needs
     # no ssh, no shared folder and no network at all. Attach it on the host:

@@ -167,9 +167,44 @@ if (-not $DryRun) {
     Ok "built ($([math]::Round((Get-Item $tempIso).Length / 1MB, 2)) MB)"
 }
 
+# --- prove it, BEFORE anything is attached -----------------------------------
+
+Step '4. Verify the image, not the intention'
+
+# ORDER MATTERS, AND IT COST AN HOUR TO LEARN. This check used to run last, on
+# the placed image, after both VMs had it attached -- and Mount-DiskImage plus
+# Dismount-DiskImage on the host YANKS THE MEDIUM OUT of every guest holding
+# it. The guests were left with an empty drive, and the Engine's next `mount`
+# said "fsconfig() failed: /dev/sr0: Can't open blockdev" -- a verification step
+# that broke the very thing it had just verified (2026-08-13).
+#
+# So it runs here, against the temporary image, before anything sees it.
+if (-not $DryRun) {
+    $img = Mount-DiskImage -ImagePath $tempIso -PassThru
+    try {
+        $letter = ($img | Get-Volume).DriveLetter
+        $missing = @()
+        foreach ($f in 'scripts\lab_engine_setup.sh', 'scripts\lab_client_setup.ps1',
+                       'scripts\lab_host_finalize.ps1', 'scripts\setup_lab_vms.ps1',
+                       'certs\engine-cert.pem', 'certs\engine-key.pem', 'pyproject.toml') {
+            if (-not (Test-Path "${letter}:\$f")) { $missing += $f }
+        }
+        if ($missing) { throw "Image is missing: $($missing -join ', ')" }
+        Ok 'scripts, certs and pyproject.toml are on the disc'
+
+        # Prove freshness rather than assume it: compare against the working copy.
+        $onDisc = (Get-FileHash "${letter}:\scripts\lab_engine_setup.sh").Hash
+        $onHost = (Get-FileHash (Join-Path $RepoPath 'scripts\lab_engine_setup.sh')).Hash
+        if ($onDisc -ne $onHost) { throw 'lab_engine_setup.sh on the disc does not match the working copy.' }
+        Ok 'disc matches the working copy'
+    } finally {
+        Dismount-DiskImage -ImagePath $tempIso | Out-Null
+    }
+}
+
 # --- eject, place, re-attach -------------------------------------------------
 
-Step '4. Place'
+Step '5. Place'
 
 $vms = @()
 foreach ($name in $AttachTo) {
@@ -223,33 +258,6 @@ foreach ($vm in $vms) {
     Ok "$($vm.Name): DvdMediaType ISO"
 }
 
-# --- prove it ----------------------------------------------------------------
-
-Step '5. Verify the image, not the intention'
-
-if (-not $DryRun) {
-    $img = Mount-DiskImage -ImagePath $IsoPath -PassThru
-    try {
-        $letter = ($img | Get-Volume).DriveLetter
-        $missing = @()
-        foreach ($f in 'scripts\lab_engine_setup.sh', 'scripts\lab_client_setup.ps1',
-                       'scripts\lab_host_finalize.ps1', 'scripts\setup_lab_vms.ps1',
-                       'certs\engine-cert.pem', 'certs\engine-key.pem', 'pyproject.toml') {
-            if (-not (Test-Path "${letter}:\$f")) { $missing += $f }
-        }
-        if ($missing) { throw "Image is missing: $($missing -join ', ')" }
-        Ok 'scripts, certs and pyproject.toml are on the disc'
-
-        # Prove freshness rather than assume it: compare against the working copy.
-        $onDisc = (Get-FileHash "${letter}:\scripts\lab_engine_setup.sh").Hash
-        $onHost = (Get-FileHash (Join-Path $RepoPath 'scripts\lab_engine_setup.sh')).Hash
-        if ($onDisc -ne $onHost) { throw 'lab_engine_setup.sh on the disc does not match the working copy.' }
-        Ok 'disc matches the working copy'
-    } finally {
-        Dismount-DiskImage -ImagePath $IsoPath | Out-Null
-    }
-}
-
 Write-Host @"
 
 Done.
@@ -258,3 +266,7 @@ Done.
 "@ -ForegroundColor Green
 
 if ($DryRun) { Write-Host "DRY RUN -- nothing was changed.`n" -ForegroundColor Magenta }
+
+# Explicit, because a caught-and-retried attach failure leaves $? false and
+# would otherwise report a successful, verified build as a failure.
+exit 0
