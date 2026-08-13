@@ -75,6 +75,36 @@ are changeable any time at **VM → Settings → Network Adapter**.
 Engine `.2`, Client `.3`, `/24`, no gateway. Nothing moves when the host reboots,
 unlike topology A's two NAT ranges.
 
+**`scripts/vm_console_shot.ps1 -VMName <vm>` reads a running guest's screen from
+the host** — Hyper-V's WMI thumbnail API, no agent and nothing typed into the
+guest. It is the only way to see a VM sitting at a boot menu or an installer,
+and it makes the screen quotable instead of described.
+
+## The Engine guest (Debian), in five lines
+
+Full walk-through in [LAB-SETUP.md](LAB-SETUP.md) steps 7–8. The ones that cost
+hours on 2026-08-13:
+
+**512 MB is the runtime size, not the install size.** Debian 13 drops into
+low-memory mode below ~1 GB and starts asking which udebs to load. Install at
+2 GB; `lab_host_finalize.ps1` cuts it back.
+
+**tasksel: Space toggles, Enter accepts the page.** Enter is right on every
+other screen of the install, which is exactly why this one catches people. And
+clearing *Debian desktop environment* is not enough — the indented `... GNOME`
+is a separate task, ticked by default. A four-digit file count on the next
+screen means a desktop is going in: power off and redo.
+
+**There is no `sudo`,** because a root password was set — Debian installs sudo
+only when that is left blank. `su -`, with the dash, for root's `PATH`.
+
+**The keyboard layout follows the keyboard, not the country.** `@` above the `2`
+key means US, `"` means UK. Wrong answer types `|` as `>`, so pipes become
+redirects and the shell runs a different command than the one you wrote.
+
+**A finished dialog often leaves its ghost on the console.** It looks frozen and
+is not; `clear`.
+
 ## Things that fail silently
 
 **`--id` must match everywhere.** `STATE_DIR` is derived from `CLIENT_ID`, so the
@@ -131,7 +161,7 @@ Eight things there are decisions, not gaps.
 | `issues.md` **A/B/C/D** | needs your decision / resolved / open / accepted limitation. The letter is the status, so an item's letter changes when it is fixed (C13 → B21). Numbers are never reused. |
 | `testing.md` **T<part>.<n>** | test ID: part number, then sequence. T5.5 is Part 5, test 5. |
 
-## The five docs
+## The six docs
 
 | | |
 |---|---|
@@ -139,4 +169,5 @@ Eight things there are decisions, not gaps.
 | [todo.md](todo.md) | the phase plan |
 | [issues.md](issues.md) | what is wrong, undecided or unproven |
 | [commands.md](commands.md) | every command and flag. Tracks the code |
-| [testing.md](testing.md) | the Phase 5 manual test plan |
+| [testing.md](testing.md) | the Phase 5 manual test plan, and the reasoning behind the lab |
+| [LAB-SETUP.md](LAB-SETUP.md) | how to build that lab from nothing, on any Windows 11 Pro machine. Ten steps, four scripts, symptom-first pitfalls. This is the one you follow with your hands |

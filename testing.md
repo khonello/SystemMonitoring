@@ -907,8 +907,20 @@ consequences of choices made a screen or two earlier:**
   European layouts, keycode 86) the US map yields `<` and `>` from it, so `|`
   types as `>`. That is worse than a dead key: a pipe becomes a redirect, the
   shell runs a *different valid command*, and the error that surfaces belongs to
-  something else entirely. `dpkg-reconfigure keyboard-configuration` then
-  `setupcon` fixes it live.
+  something else entirely — here, a `dpkg` usage complaint about conflicting
+  flags, which points at nothing relevant. `dpkg-reconfigure
+  keyboard-configuration` then `setupcon` fixes it live, and `LAB-SETUP.md`
+  step 7 has every dialog answer.
+
+  **The layout is a property of the keyboard, not of the country**, and the
+  difference matters in exactly the place you would expect it not to: the symbol
+  printed above `2` is `@` on US boards and `"` on UK ones, and that one key
+  settles it in two seconds. `English (Ghana)` is offered in the list and is
+  US-derived, so on a UK-legended keyboard — which is what this build runs on —
+  picking it by geography reintroduces the mismatch. The lab here is `English
+  (UK)` for that reason, deliberately, and it is not an inconsistency to
+  "correct" on the presentation machine: **re-run the test there**, because the
+  answer belongs to whatever keyboard that machine has.
 
 **Verifying the install is actually minimal**, before trusting anything built on
 top of it — `df -h /` and a package count:

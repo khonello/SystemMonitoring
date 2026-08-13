@@ -248,8 +248,8 @@ desktop.
 |---|---|---|
 | GRUB boot menu | **Install**, not *Graphical install* | The ncurses installer is lighter and behaves better over VMConnect. The GTK one buys nothing on a headless server |
 | Language | English | Cosmetic |
-| Location | **`other` → `Africa` → `Ghana`** | The first list is a short one of common choices, not the world. If your country is not on it, it is behind `other`, grouped by continent — it is not missing |
-| Keyboard | US, or your layout | Cosmetic |
+| Location | your country — if it is not on the first list, **`other` → continent → country** | That first list is a shortlist of common choices, not the world. Ghana, for one, is only behind `other` → `Africa`. It is not missing, it is one level down |
+| Keyboard | **the layout your physical keyboard actually has** — see the test below | Not cosmetic, and the only screen here whose wrong answer follows you into every later command |
 | Hostname | **`labengine`** | Cosmetic. Nothing on this switch resolves by name, and TLS verifies the fixed identity `labmonitor-engine` from the certificate, **not** the machine's hostname |
 | Domain name | **blank** | There is no domain. An invented one only shows up later in prompts |
 | Root password | anything you'll remember | `lab_engine_setup.sh` needs root |
@@ -260,7 +260,7 @@ desktop.
 | Partitioning scheme | **All files in one partition** | |
 | Write changes | **Finish partitioning** → **Yes** | First irreversible step. Everything before it lives in RAM, so a restart up to here is free |
 | Scan extra installation media | **No** | One disc, and it has what the base system needs |
-| Debian archive mirror — country | **`enter information manually`**, at the very top of the list | **Ghana is not in the list** — the list only holds countries that host a mirror. Picking a random neighbour is worse than the CDN |
+| Debian archive mirror — country | **`enter information manually`**, at the very top of the list | Different list, different reason from the location screen: this one holds **only countries that host a mirror**, so in much of the world yours is genuinely absent (Ghana is). Picking a plausible neighbour is worse than the CDN |
 | Mirror hostname / directory | **`deb.debian.org`** / `/debian` | Anycast CDN: it resolves to whichever mirror is genuinely nearest, from anywhere |
 | HTTP proxy | blank | |
 | Popularity contest | No | |
@@ -269,6 +269,68 @@ desktop.
 
 This step needs the internet, which the VM has because it is still on the
 **Default Switch**. It moves to the isolated `LabMonitor` switch at step 9.
+
+### The keyboard, and the two-second test that settles it
+
+**The question is about the physical keyboard in front of you, not about where
+you are.** Look at the `2` key and read the symbol printed above the 2:
+
+| Printed above `2` | Your layout is | Pick |
+|---|---|---|
+| `@` | US | `English (US)` |
+| `"` | UK | `English (UK)` |
+
+That one key is decisive because `@` and `"` swap places between the two
+layouts. **Do not pick by country.** `English (Ghana)` is in that list and is
+US-derived; choosing it while typing on a UK keyboard gives exactly the mismatch
+this section exists to prevent. This machine's keyboard prints `"`, so the lab
+here runs `English (UK)` in a Ghanaian office, and that is the correct answer,
+not an inconsistency.
+
+**The symptom, if it is already wrong:** `|` types as `>`, and `\` types as `<`.
+
+That signature identifies the cause precisely. UK and most European keyboards
+are 105-key **ISO** boards with an extra key between left Shift and `Z` — keycode
+86, which US 104-key boards do not have at all. The US console keymap assigns
+`<` and `>` to that key. So the pipe you typed is a *redirect*: the shell builds
+a different, perfectly valid command, runs it, and the error you get back
+belongs to something else entirely. Here it surfaced as a `dpkg` usage error
+about conflicting `-c` and `-l` flags, which has nothing to do with the actual
+problem and sends you looking in the wrong place.
+
+**Fixing it afterwards** — as root (see step 8 for `su -`):
+
+```sh
+dpkg-reconfigure keyboard-configuration
+```
+
+| Dialog | Answer |
+|---|---|
+| Keyboard model | **Generic 105-key PC** — usually already highlighted |
+| Keyboard layout | the list offers **only US variants**. Your layout is behind **`Other`**, the last entry at the bottom — the same "one level down" pattern as the location screen |
+| Country of origin | e.g. **`English (UK)`**. Sits directly above `English (US)`; a kernel log line may print over that row, which obscures the text but not the highlight |
+| Layout variant | the **plain** entry — not Dvorak, Colemak, Macintosh or "intl." |
+| Key to function as AltGr | **`The default for the keyboard layout`**, the top entry. The highlight starts on *Left Alt*, six lines down, so this one needs arrowing **up** |
+| Compose key | **`No compose key`** |
+
+Then apply and verify without rebooting:
+
+```sh
+setupcon
+grep XKB /etc/default/keyboard      # XKBMODEL="pc105", XKBLAYOUT="gb" (or "us")
+```
+
+Type `|` and `\` at the prompt to confirm, then **Ctrl+C** to discard the line
+rather than running it.
+
+> **When the last dialog closes, the console is often not repainted.** The dead
+> dialog stays on screen and the machine looks frozen — it is not, and your
+> Enter presses are going to the shell underneath it. `clear` proves it. This
+> cost a "it just stuck there" here on 2026-08-13; the giveaway in the capture
+> was three `root@labengine:~#` prompts stacked below the ghost dialog.
+
+**Getting it right on the install screen skips all of the above.** The
+reconfigure exists because that screen was answered with the default.
 
 ### What tasksel is, and why every doc here shouts about it
 
@@ -327,16 +389,22 @@ The `-` matters: it loads root's environment, including `/usr/sbin` on `PATH`,
 which is where `mount` lives. Everything in this step runs as root, so drop
 `sudo` from any command you are copying from elsewhere.
 
-**Fix the keyboard first if `|` does not type as `|`.** The install offers a US
-layout by default, and if your keyboard has the extra key to the left of Z (UK
-and most European layouts, keycode 86) the US console keymap gives you `<` and
-`>` from it — so a pipe silently becomes a redirect, which fails as a *different*
-command rather than an error. As root:
+**Fix the keyboard first if `|` does not type as `|`** — step 7's keyboard
+section has the test, every dialog answer, and the repaint trap that makes the
+last screen look frozen. Nothing below needs a pipe, so this is not blocking,
+but it will bite the moment you improvise a command.
+
+**Confirm the install really is minimal** before building anything on top of it:
 
 ```sh
-dpkg-reconfigure keyboard-configuration     # model: Generic 105-key PC, layout: your actual one
-setupcon                                    # applies it without a reboot
+df -h /
+dpkg -l > /tmp/p; grep -c '^ii' /tmp/p
 ```
+
+**~1.2 GB used and ~313 packages** is right (measured 2026-08-13). A desktop
+that survived tasksel reads as 4–5 GB and well over 1500 packages. Note the
+pipe-free second command — this is the check you want *before* the keyboard is
+sorted out, so it is written to work either way.
 
 Linux does not mount discs by itself without a desktop, so mount it by hand. The
 DVD drive is `/dev/sr0`; `-o ro` is explicit because the medium is read-only and
@@ -429,7 +497,10 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 | *Select and install software* is retrieving **1000+ files** | A desktop is being installed. Enter on the tasksel page **accepts what is ticked** — it does not toggle the highlighted line, and the desktop entries are ticked by default | Power off and redo the install. ~8 minutes, versus untangling a desktop from an 8 GB disk. A minimal install retrieves a few hundred files, not thousands — that count is the tell |
 | Tempted to `apt purge` the desktop instead of reinstalling | A purged desktop task leaves residue, and `gdm` will have been enabled on a headless box | Reinstall. The VM holds nothing yet — the repo arrives at step 8, after this |
 | `sudo: command not found` in LabEngine | Debian installs `sudo` **only** when the root password is left blank at install. We set one | `su -` (with the dash, for root's `PATH`). Nothing here needs `sudo` installed |
-| `\|` types as `>` and `\` types as `<` in the guest console | Keyboard has the extra key left of Z (keycode 86, UK/European); the US console keymap gives `<`/`>` from it. A pipe becomes a redirect, so the command *runs* and fails as something else | As root: `dpkg-reconfigure keyboard-configuration`, pick your real layout, then `setupcon` |
+| `\|` types as `>` and `\` types as `<` in the guest console | Keyboard has the extra key left of Z (keycode 86, UK/European); the US console keymap gives `<`/`>` from it. A pipe becomes a redirect, so the command *runs* and fails as something else | As root: `dpkg-reconfigure keyboard-configuration`, pick your real layout, then `setupcon`. Step 7 has the `2`-key test and every dialog answer |
+| An error that makes no sense for the command you typed | Same cause as the row above, one step removed — the shell ran a *different* command than the one you meant | Check the line as the shell saw it before debugging the tool it names |
+| A `dpkg-reconfigure` / installer dialog appears frozen; Enter does nothing | The dialog already exited and the console was never repainted. The shell prompt is underneath the ghost | `clear`. If prompts are stacking up at the bottom of the screen, that is the confirmation |
+| Your keyboard layout is not in the layout list | The list shows variants of the *currently selected* language only | **`Other`** at the bottom → full country list. Same pattern as the location screen |
 | OOBE loops back to "choose country or region" forever | Trimmed/debloated media — OOBE completion is never recorded | Use **stock** media. `issues.md` D9 |
 | `OOBEMSAHELLO` / `OOBELOCALHELLO`, "Something went wrong" | Windows Hello components stripped from trimmed media | Click **Skip**. Or use stock media and it doesn't happen |
 | "Type a different user name" for `lab` | The account already exists from a previous OOBE pass | Symptom of the loop above, not a naming problem |
