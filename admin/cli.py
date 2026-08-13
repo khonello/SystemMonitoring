@@ -152,8 +152,14 @@ def _check_qml() -> int:
 
     from admin.backend import Backend
     from admin.config import QML_DIR
+    from admin.style import apply_style
 
     app = QGuiApplication(sys.argv[:1])
+
+    # The same style the console runs under. Without this the check would load
+    # a different tree of controls than the one that ships, and main.qml's
+    # Material attached properties would warn here while working in the window.
+    apply_style()
     backend = Backend()
 
     qml_engine = QQmlApplicationEngine()

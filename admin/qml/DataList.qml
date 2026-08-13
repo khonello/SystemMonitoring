@@ -10,7 +10,8 @@ Item {
     id: root
 
     property alias model: listView.model
-    property string emptyText: "No data"
+    property string emptyTitle: "No data"
+    property string emptyText: ""
 
     property var primary: function (m) { return "" }
     property var secondary: function (m) { return "" }
@@ -64,13 +65,36 @@ Item {
         }
     }
 
-    Label {
+    // EMPTY STATE. issues.md C18: an empty table is indistinguishable from a
+    // broken feature, and this used to be one faint centred line at opacity
+    // 0.5 -- present, but quiet enough to read as "nothing here". It now states
+    // the reason plainly and, where there is one, when to expect data.
+    //
+    // Three different situations reach this label and they are not the same
+    // thing: nothing has arrived YET, this client genuinely HAS none, and no
+    // client is selected at all. The caller supplies the wording; this only
+    // makes sure it is actually read.
+    ColumnLayout {
         anchors.centerIn: parent
-        width: parent.width - 40
-        horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.Wrap
+        width: Math.min(parent.width - 48, 420)
+        spacing: 6
         visible: listView.count === 0
-        opacity: 0.5
-        text: root.emptyText
+
+        Label {
+            text: root.emptyTitle
+            font.bold: true
+            font.pixelSize: 14
+            opacity: 0.75
+            horizontalAlignment: Text.AlignHCenter
+            Layout.fillWidth: true
+        }
+
+        Label {
+            text: root.emptyText
+            wrapMode: Text.Wrap
+            opacity: 0.55
+            horizontalAlignment: Text.AlignHCenter
+            Layout.fillWidth: true
+        }
     }
 }

@@ -19,6 +19,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from admin.backend import Backend
+from admin.style import apply_style
 from admin.config import (
     APPLICATION,
     DEFAULT_HOST,
@@ -59,6 +60,10 @@ def main() -> int:
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Lab Monitor - Administrator")
     app.setOrganizationName(ORGANISATION)
+
+    # Before any QML is loaded, and shared with --check-qml so the check
+    # exercises the style that ships. See admin/style.py.
+    apply_style()
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)

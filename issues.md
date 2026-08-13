@@ -1078,6 +1078,32 @@ Distinct from every other open item here in that it is **presentation quality,
 not correctness**. The Admin works — it registers, heartbeats, dispatches
 commands, receives telemetry, and its QML loads clean under `--check-qml`.
 
+**Partly DONE, 2026-08-13.** Four changes, all QML plus one small module, all
+verified against a running window rather than `--check-qml` alone:
+
+1. **The window opens maximized** (`visibility: Window.Maximized`). It had been
+   locked to `height = width * 0.30` and *re-applied that ratio on every
+   resize*, making it a 1600×480 letterbox that fought anyone who tried to
+   change it. That one binding was the largest single cause of "the dimensions
+   look distorted".
+2. **One theme instead of two.** No Controls style was ever selected, so the
+   console inherited the platform's: a white title bar and light toolbar around
+   Qt's dark content, with light grey text areas. `admin/style.py` now selects
+   Material and **both the app and `--check-qml` call it**, so the check
+   exercises the style that ships. Dark theme, background and accent are set in
+   four lines in `main.qml`.
+3. **Tabs sized to their labels.** A `TabBar` splits its width equally between
+   its buttons unless they set one, so three tabs across a maximized window
+   were three ~640px slabs. Both tab bars now size to content.
+4. **Toolbar height raised to fit Material's floating labels** — "Engine host"
+   and "Port" were clipped off the top edge, which reads as a rendering fault
+   rather than a spacing one. The script-limit spinbox likewise widened, since
+   Material's larger indicators had squeezed the value out entirely, leaving
+   `- s +` with no number between them.
+
+**Still open here:** the fleet view below, and a general pass over spacing and
+typography now that the shell is coherent.
+
 **Requirement, decided 2026-08-13: the window opens maximized and stays that
 way.** Minimized or maximized, nothing in between. This is not decoration — it
 is the direct fix for "dimensions read as distorted", which is what a layout
@@ -1214,13 +1240,30 @@ within half a minute of connecting and Network within a minute. Still empty
 after that, with the Engine logging relays to one admin peer, is a defect to
 chase rather than a wait.
 
-**An empty table with column headers is indistinguishable from a broken
-feature.** That is the actual complaint, and it is right: the UI currently
-presents three states — "nothing has arrived yet", "this client genuinely has
-none", and "this cannot work on this hardware" — as one blank grid. USB is the
+**Correction to the first draft of this entry.** It claimed the UI presented
+these states "as one blank grid". That was wrong, and checking the code rather
+than the screen is how it got written: `DataList` already had an `emptyText`
+property and `MonitoringPanel` already set sensible wording, including the
+30-second interval. The real defect was quieter — one centred line at
+`opacity: 0.5`, in body text, in the middle of a large dark panel, which is
+present but easy to read as "nothing here". The lesson is the ordinary one: an
+empty state that exists and an empty state that is *read* are different things.
+
+**An empty table is still indistinguishable from a broken feature**, which is
+the complaint that started this and remains right. Three states reach the same
+label — "nothing has arrived yet", "this client genuinely has none", and "no
+client is selected at all" — and only the first two were worded. USB is the
 sharpest case, since in a Hyper-V guest it can *never* fill (no plain USB
-pass-through), so the tab advertises a capability the machine cannot deliver
-and says nothing about why.
+pass-through), so the tab advertises a capability the machine cannot deliver.
+
+**Done 2026-08-13.** `DataList` now takes an `emptyTitle` as well as
+`emptyText` and renders them as a bold heading over a wrapped explanation, and
+every tab distinguishes "no client selected" from "waiting for the next
+report", naming the interval and pointing at Reports for history. USB says
+*"No USB events recorded"* with no interval promised and no "yet" implied,
+since it is event-driven. **Still to do:** the last-sample timestamp (item 2
+below), which is what distinguishes a client that stopped reporting from one
+that never started.
 
 **What would fix it, cheapest first:**
 

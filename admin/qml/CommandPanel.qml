@@ -41,7 +41,10 @@ Item {
                 stepSize: 30
                 value: 300
                 editable: true
-                Layout.preferredWidth: 120
+                // Material draws larger +/- indicators than the previous style,
+                // which squeezed the value out of a 120px box until it read as
+                // "- s +" with no number between them.
+                Layout.preferredWidth: 170
 
                 textFromValue: function (value) { return value + "s" }
                 valueFromText: function (text) { return parseInt(text) || 300 }

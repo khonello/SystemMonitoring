@@ -2,41 +2,62 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
+import QtQuick.Window
 
 ApplicationWindow {
     id: window
 
-    // A wide rectangle: height tracks width at 30%. Widening the window keeps
-    // the shape; dragging the height directly overrides it, which is the normal
-    // QML behaviour of a binding replaced by the window manager.
+    // One theme, stated once. The console previously inherited the platform
+    // default and arrived as two half-finished themes at once: light title bar
+    // and toolbar, dark body, light grey text areas. The style itself is
+    // selected in admin/style.py, which both this app and --check-qml call.
+    Material.theme: Material.Dark
+    Material.background: "#12161c"
+    Material.primary: "#1b2430"
+    Material.accent: "#4c8dff"
+
+    // MAXIMIZED, ALWAYS. issues.md C17.
     //
-    // The shape suits the layout below — a horizontal split with the roster
-    // beside the panels — but it leaves little vertical room, which is why the
-    // command panel's height is proportional rather than fixed.
-    readonly property real aspectRatio: 0.30
+    // This used to lock height to 30% of width and re-apply that ratio on every
+    // resize, which made the window a 1600x480 letterbox that fought anyone who
+    // tried to change it. That single binding was most of why the Admin read as
+    // scaffolding rather than a tool: an operator console is a full-screen
+    // thing, and there is no shape a supervisor's dashboard wants less than a
+    // strip with no vertical room for the lists that are the entire point.
+    //
+    // Maximized rather than Window.FullScreen: the title bar and taskbar stay,
+    // so the operator can minimise, alt-tab and see a clock. FullScreen reads
+    // as a kiosk, which is wrong for the machine doing the supervising and
+    // awkward to escape from mid-demonstration.
+    visibility: Window.Maximized
 
-    width: 1600
-    height: Math.round(width * aspectRatio)
+    // Only used when someone restores the window down. The minimums matter more
+    // than these do: the lab is demonstrated on projectors and second machines,
+    // so the layout has to hold at 1024x768 as well as at full HD. Everything
+    // below is anchored and proportional for that reason -- maximized is not a
+    // licence for fixed coordinates.
+    width: 1400
+    height: 900
 
-    minimumWidth: 1100
-    minimumHeight: Math.round(minimumWidth * aspectRatio)
-
-    // Re-applied rather than left to the binding alone. Dragging a window edge
-    // makes the window manager write height directly, which replaces the
-    // binding above and would strand the ratio wherever it happened to be.
-    // The offscreen platform cannot exercise a real user resize, so this is
-    // belt-and-braces for the case the automated check cannot reach.
-    onWidthChanged: height = Math.round(width * aspectRatio)
+    minimumWidth: 1024
+    minimumHeight: 700
 
     visible: true
     title: "Lab Monitor - Administrator"
 
     header: ToolBar {
+        // Tall enough for Material's floating field labels. At the default
+        // height "Engine host" and "Port" were clipped off the top edge, which
+        // reads as a rendering fault rather than a spacing one.
+        height: 76
+
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
+            spacing: 10
 
             Label {
                 text: "Lab Monitor"
@@ -157,13 +178,18 @@ ApplicationWindow {
             SplitView.fillWidth: true
             spacing: 0
 
+            // Tabs sized to their labels, not stretched across the window.
+            // A TabBar distributes its width equally among its buttons unless
+            // they set one, so three tabs across a maximized window became
+            // three 640px slabs -- which is most of what "the dimensions look
+            // distorted" meant (issues.md C17).
             TabBar {
                 id: tabs
                 Layout.fillWidth: true
 
-                TabButton { text: "Monitoring" }
-                TabButton { text: "Reports" }
-                TabButton { text: "Policy" }
+                TabButton { text: "Monitoring"; width: implicitWidth + 24 }
+                TabButton { text: "Reports"; width: implicitWidth + 24 }
+                TabButton { text: "Policy"; width: implicitWidth + 24 }
             }
 
             StackLayout {
@@ -176,12 +202,14 @@ ApplicationWindow {
                 PolicyPanel {}
             }
 
-            // Proportional, not the fixed 260 it used to be. In a window this
-            // wide and short a fixed panel would claim most of the height and
-            // leave the tab above it unusable.
+            // Proportional AND capped. The proportion was added when the window
+            // was a 480px strip, where a fixed 260 panel swallowed the tab above
+            // it; maximized, the same expression just pins to 260 and the data
+            // views get the rest, which is the right split for a console whose
+            // job is showing lists.
             CommandPanel {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(260, Math.round(window.height * 0.34))
+                Layout.preferredHeight: Math.min(300, Math.round(window.height * 0.34))
             }
         }
     }
