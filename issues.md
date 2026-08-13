@@ -1314,7 +1314,47 @@ correct for reporting. This is a Phase 6 item at the earliest — after
 integration and load testing, which is where the write-cost question gets a
 real answer rather than an estimate.
 
-#### The shape it should take: a watch subscription, not a mode
+#### Settled: selection is the trigger, and there is no toggle at all
+
+**The objection that resolved this, 2026-08-13: "this is a monitoring system at
+core, not a retention system — if live is not there, what is it monitoring?"**
+That is correct, and it exposes something this project should say plainly: **at
+30 and 60 second intervals there is no live mode here.** What exists is
+periodic reporting, and the dashboard shows the most recent report rather than
+the state of the machine. Describing it as live monitoring is generous, and on
+substance this gap outranks C17 — C17 is how the Admin looks, this is what it
+does.
+
+Two questions were being run together, and separating them dissolves the whole
+toggle debate:
+
+- *What is the product for?* Watching machines now. That is live, and it should
+  be the default experience rather than a thing you switch on.
+- *What must never be silently switchable?* The record. Not because recording
+  matters more, but because its absence is invisible at the moment it is
+  created and expensive at the moment it is wanted.
+
+CCTV settles the analogy: watching is the point, the recording runs regardless,
+and you are grateful for it exactly once. Live is the interface; the record is
+a by-product that must not be optional.
+
+**So: no toggle, and no mode.**
+
+- **Selecting a client starts a live subscription automatically** — 1–5s,
+  display-only, lasting as long as the selection does. There is no button,
+  because selecting a machine already *is* the operator saying "I am watching
+  this one".
+- **Recording continues at its coarse cadence for everything, always.** Nobody
+  enables it, nobody forgets it, and there is no state to leave wrong.
+
+**The mechanism is already on the roadmap.** D5's fix is a subscription
+registry so the Engine relays only the client an admin is watching; that same
+registry is what tells a client to sample fast. One mechanism, two payoffs —
+fan-out drops *and* the watched machine goes live. It also bounds the cost
+exactly: `MAX_ADMINS` is 5 and each admin has one selection, so no more than
+five machines sample fast regardless of how large the lab grows.
+
+#### Earlier framing: a watch subscription rather than a mode
 
 Proposed 2026-08-13 as a GUI toggle between "live" and "retention" modes, live
 meaning fast and unpersisted. **Agreed on the feature, rejected on the mode.**
