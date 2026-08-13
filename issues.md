@@ -1385,6 +1385,44 @@ correct for reporting. This is a Phase 6 item at the earliest — after
 integration and load testing, which is where the write-cost question gets a
 real answer rather than an estimate.
 
+#### BUILT, 2026-08-13 — what shipped, and what is still open
+
+**Shipped.** Selecting a client in the Admin declares a watch
+(`MSG_WATCH`), and two things follow from that one declaration:
+
+- **Telemetry is scoped** to the consoles watching that client
+  (`engine/watch.py`, `relay_targets` on the telemetry routes). This closes D5.
+- **The watched client samples every 3 seconds** instead of 30/60
+  (`MSG_SET_SAMPLE_RATE`, `client/sampling.py`), so the view is live rather
+  than a report that lands every half minute.
+
+Safety properties, each following a precedent already set in this project:
+fast sampling **expires by itself** (`WATCH_TTL`, renewed by the Engine while a
+watch is live, so a dead Engine cannot strand a machine at 3s); it is **not
+durable** (absent from `DURABLE_COMMANDS`, like a screen capture — replaying
+"stream fast" at a machine that reconnects tomorrow serves an operator who went
+home); and it is **reference-counted by transition**, so two consoles on one
+machine do not fight and re-selecting costs nothing. Cost is bounded by
+construction: `MAX_ADMINS` is 5 and each admin watches one client, so at most
+five machines ever sample fast however large the lab grows.
+
+Covered by tests in `tests/test_routing.py` (scoping, rate transitions, last
+watcher leaving, nothing queued for an offline client, renewal touching only
+watched clients) and `tests/test_client.py` (interval selection, TTL lapse, a
+capped TTL, a malformed TTL).
+
+**Still open from this entry:**
+
+1. **The intervals are still not configurable.** `common/constants.py` reads no
+   environment, unlike the rest of the project's config, so changing a sample
+   rate still means editing a constant. This was proposal 1 and is the
+   prerequisite for measuring anything.
+2. **`bench_database` has not been re-run** at the new effective write rate.
+   The project's own rule is to measure before changing write volume; watching
+   one machine at 3s is a small change, but it is a change.
+3. **Recording sessions** ("start recording — exam session, 2 hours") are
+   designed below and unbuilt.
+
 #### Settled: selection is the trigger, and there is no toggle at all
 
 **The objection that resolved this, 2026-08-13: "this is a monitoring system at
@@ -1577,7 +1615,7 @@ the operator.
 admin present — an automatic escalation, or a multi-step remediation that has
 to finish even if the console closes.
 
-### D5. Every admin receives every client's telemetry (was C5)
+### D5. Every admin received every client's telemetry — **RESOLVED 2026-08-13**
 
 Live dashboard updates are push-based: `APP_DATA`, `NETWORK_DATA` and
 `USB_EVENT` are forwarded to all connected admins, which then buffer per client
@@ -1596,6 +1634,17 @@ registry, rather than an edit to three handlers (B13).
 Unchanged in scale, but no longer unobservable: `routing.relay` reports what it
 delivered and to whom it failed, so the cost of this fan-out is at least
 measurable before anyone decides whether it needs fixing.
+
+**Built, 2026-08-13, and it came for free with C19.** An admin declares what it
+is watching (`MSG_WATCH`); `engine/watch.py` holds the subscriptions and the
+telemetry routes carry `relay_targets=watch.watchers_of`, so a client's data
+reaches the consoles watching it and nobody else. It stayed a one-row change to
+the table exactly as predicted above, which is the clearest evidence B13's
+routing design paid for itself.
+
+Kept here rather than renumbered into section B: this entry is the reasoning
+for *why* the fan-out was acceptable at project scale, and that reasoning is
+still what a panel would ask about. The fix is recorded in C19.
 
 ### D6. Whitelist filtering is approximated, not expressed (was C9)
 

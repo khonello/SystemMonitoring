@@ -216,10 +216,19 @@ Windows, Qt 6 + QML over a Python backend, single-threaded via qasync.
 The address is also remembered in QSettings once a connection succeeds;
 `--engine` overrides what the window is prefilled with.
 
+Read from the environment, with no flag:
+
+| Env var | Default | What it is |
+|---|---|---|
+| `ADMIN_CAPTURE_DIR` | `~/LabMonitor/captures` | Where returned screen captures are written, as `<client>-<timestamp>.jpeg`. Operator output, so it lives with the operator's files rather than in the repository — a console installed read-only must still be able to save one. The client id reaches a filename and is peer-supplied text, so it is sanitised before it does |
+
 `--check-qml` is the one to reach for after touching a `.qml` file. It loads the
 whole tree on the offscreen platform with the same context properties
-`admin/main.py` sets, collects every Qt warning and exits 1 if there are any —
-no window, no Engine connection, nothing to close.
+`admin/main.py` sets, **under the same Controls style the console runs**
+(`admin/style.py`, called by both), collects every Qt warning and exits 1 if
+there are any — no window, no Engine connection, nothing to close. A check
+running under a different style than the app would be checking a different tree
+of controls than the one that ships.
 
 ```powershell
 .\.venv\Scripts\python.exe -m admin --check-qml

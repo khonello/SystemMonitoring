@@ -322,7 +322,7 @@ SYSTEM. See issues.md C10.
 - [x] `certs/` and `*.pem` gitignored — the key is secret, the certificate is
       deployment-specific
 
-## Phase 5 — Manual per-system verification ⬅ next
+## Phase 5 — Manual per-system verification ⬅ in progress
 
 Prove each unit works **on its own, on its own machine**, before anything is
 integrated or packaged. Each system has a diagnostic that needs nothing else
@@ -341,18 +341,30 @@ running, so a failure points at one component instead of at "the system".
 - [x] `client --check` — config, local state, and which bundled pieces are absent
 - [x] `admin --check-qml` — loads every QML file offscreen, reports warnings
 
-Verified on this machine: `--check-qml` loads all 7 QML files clean; `--once`
+Verified on a dev box: `--check-qml` loads every QML file clean; `--once`
 returned 212 processes with real CPU numbers, window titles, network counters
 and idle time.
 
+**The lab is built and the first tests have passed (2026-08-13).** Both VMs
+exist, are checkpointed, and the three components have talked to each other
+across three machines over TLS. Recorded in `testing.md`'s results table:
+**T0.1** (the gate — client VM reaches the Engine on 5000), **T1.1**, **T1.2**
+(Engine serves, TLS on, `EpollSelector`), **T5.1** (registration, 15s
+heartbeats, telemetry) and **T5.2** (Admin receives relayed telemetry).
+`LAB-SETUP.md` is the procedure that rebuilds that lab from nothing on any
+Windows 11 Pro machine — it is deliberately machine-agnostic, since the lab is
+built again on the presentation machine.
+
 To run by hand:
 
-- [ ] Engine under WSL — `--check`, then serve, and confirm the listen address,
-      transport mode and auth posture in the log
-- [ ] Client on a Windows machine — `--once`, then a live session; confirm
+- [x] Engine — `--check`, then serve, and confirm the listen address, transport
+      mode and auth posture in the log. **Done on the Debian VM**, not WSL: the
+      lab supersedes the WSL arrangement, though WSL remains the fallback
+      topology for a machine short on disk
+- [x] Client on a Windows machine — `--once`, then a live session; confirm
       registration, heartbeats every 15s, and telemetry on its own intervals
-- [ ] Administrator — `--check-qml`, then connected; roster, live dashboard,
-      a command round trip, all five reports
+- [x] Administrator — `--check-qml`, then connected; roster and live dashboard
+      confirmed. **A command round trip and all five reports are still to do**
 - [ ] Dialog window — `labmonitor.py dialog --message "Test" --timeout 15`
 - [ ] Overlay window — `labmonitor.py overlay --until <near-future ISO>`.
       **Takes over the screen and disables Task Manager**; run it when
@@ -367,15 +379,47 @@ To run by hand:
 - [ ] Duplicate overlays from a watchdog pass ([issues.md](issues.md) C12,
       verified) — observe the count, then fix once C11 is measured
 
-[testing.md](testing.md) is the step-by-step plan for this phase, and
-[remember.md](remember.md) the one-page list of what not to forget. It includes the
-two-laptop topology and the WSL networking setup Laptop B needs.
+**Not started: Parts 2, 3 and 4 in full** — the helper windows, the client's own
+diagnostics on the VM, reconnect behaviour, and the service-context questions.
+`testing.md`'s results table is the checklist, and most of its rows are still
+empty. "It worked when we demonstrated it" and "Phase 5 passes" are different
+claims, and only the first is currently true.
+
+[testing.md](testing.md) is the step-by-step plan for this phase,
+[LAB-SETUP.md](LAB-SETUP.md) is how the lab gets built (and rebuilt elsewhere),
+and [remember.md](remember.md) is the one-page list of what not to forget.
 
 **What this phase cannot tell you.** With packaging last, all of the above
 exercises the *fallback* paths: the running interpreter for script validation
 and execution, and the overlay run as a module rather than as an executable. A
 green Phase 5 does not transfer to the packaged build, so Phase 8 carries a
 short re-verification of the same ground.
+
+### Built ahead of schedule, during Phase 5
+
+Two things arrived here rather than in their planned phase, both because the
+lab made the gap obvious the moment real data was on screen. **The protocol
+gained two message types**, so `README.md`'s Communication Protocol section now
+lags the code — the deviation is recorded here per the usual rule:
+
+- **`WATCH` (admin→Engine) and `SET_SAMPLE_RATE` (Engine→client).** Selecting a
+  client subscribes the console to that machine's telemetry *and* asks the
+  machine to sample every 3s while watched. This closes `issues.md` D5's
+  fan-out and the live half of C19. `SET_SAMPLE_RATE` is deliberately **not** in
+  `DURABLE_COMMANDS`.
+- **Screen captures are saved and previewed.** The image had been arriving in a
+  `COMMAND_RESPONSE` and being discarded, so the operator was told "Captured
+  1920x1080" and given nothing. Now written under the operator's own directory
+  (`ADMIN_CAPTURE_DIR`) and shown.
+
+### Admin presentation work, also done here
+
+`issues.md` C17's first half: the window opens maximized, one Material dark
+theme replaces the platform default, and the console has a design system —
+`Theme.qml` plus `Section`, `SegmentedControl` and `StatTile`. Policy was
+rebuilt around blast radius. The ordering rule ("no UI work until Phase 5
+passes") was relaxed deliberately once T5.1 and T5.2 had proven the system end
+to end, which was the rule's actual purpose.
 
 ---
 

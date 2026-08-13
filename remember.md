@@ -105,6 +105,24 @@ redirects and the shell runs a different command than the one you wrote.
 **A finished dialog often leaves its ghost on the console.** It looks frozen and
 is not; `clear`.
 
+## The Admin console
+
+**Selection is a subscription, not just a highlight.** Clicking a machine tells
+the Engine to relay only that client's telemetry here *and* asks it to sample
+every 3s instead of 30/60. Deselecting releases it. Recording is unaffected by
+any of this — the Engine persists every sample regardless of who is watching.
+
+**Colours and spacing live in `admin/qml/Theme.qml`.** One palette, a 4px scale,
+30px controls, 4px radius. Don't inline a colour. Primary navigation is in the
+header; a choice *within* a page is a `SegmentedControl`, never a second
+`TabBar` — that stacking is what made the old layout read as a mistake.
+
+**QML cannot bind to `rowCount()`** — no change signal, so it evaluates once and
+never again. Use the models' `count` property.
+
+**`admin --check-qml` after touching any `.qml`.** It loads the whole tree
+offscreen under the same style the console uses, and exits 1 on any warning.
+
 ## Things that fail silently
 
 **`--id` must match everywhere.** `STATE_DIR` is derived from `CLIENT_ID`, so the
