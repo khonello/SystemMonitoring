@@ -118,19 +118,34 @@ mutate the source, and one image serves both machines.
 
 ### Build it
 
-On the **host**, from an elevated shell:
+On the **host**, from an elevated shell — one command, which also swaps the disc
+into the VM and checks its own work:
 
 ```powershell
-$stage = "$env:TEMP\labrepo"
-Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue   # never merge into a stale stage
-robocopy <repo> $stage /E /XD .venv __pycache__ .pytest_cache /NFL /NDL /NJH /NJS
-& "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe" -m -u2 -lLABREPO $stage <drive>:\LabRepo.iso
+.\scripts\build_repo_iso.ps1 -AttachTo LabEngine
 ```
 
-`oscdimg.exe` ships with the **Windows ADK** (*Deployment Tools* feature). It is
-the only external tool this procedure needs.
+Omit `-AttachTo` to build only; pass `LabEngine,LabClient` for both. `-DryRun`
+prints the plan. It finds the lab drive itself, so no drive letter appears here.
 
-What each part is doing:
+`oscdimg.exe`, which does the actual imaging, ships with the **Windows ADK**
+(*Deployment Tools* feature). It is the only external tool this procedure needs.
+
+The script exists because this is five commands with two silent failure modes,
+both of which cost an evening on 2026-08-13 — a running VM holds the image, so
+overwriting it fails outright, and `Set-VMDvdDrive` can leave the drive **empty**
+while reporting a path, handing the guest the *previous* disc. So it ejects
+before copying, verifies `DvdMediaType` rather than the path, retries once, and
+finally mounts the finished image to confirm the scripts are physically on it
+and that `lab_engine_setup.sh` hashes equal to the working copy. It refuses to
+build at all without `certs/`.
+
+**One thing it cannot do: unmount the disc inside a running guest.** Linux holds
+the medium while it is mounted, so `umount /mnt` in the guest comes first. The
+script detects the resulting lock and says so instead of failing with a bare IO
+error.
+
+What it does under the hood, and why:
 
 | Piece | Why |
 |---|---|
@@ -143,34 +158,31 @@ What each part is doing:
 | `-lLABREPO` | Volume label. This is how you recognise the drive in the guest — no space after `-l` |
 | *(no `-h`)* | `oscdimg` skips hidden files unless told otherwise, so **`.git` is not on the disc**. Deliberate: the guests get a working copy, not a repository, which is the copy-don't-clone rule enforced by construction |
 
-**Verify before trusting it** — mount the image on the host and look:
-
-```powershell
-$m = Mount-DiskImage 'K:\LabRepo.iso' -PassThru | Get-Volume
-Get-ChildItem "$($m.DriveLetter):\scripts"   # all four lab scripts must be here
-Get-ChildItem "$($m.DriveLetter):\certs"     # two .pem files
-Dismount-DiskImage -ImagePath 'K:\LabRepo.iso'
-```
-
 > **The disc is a snapshot, and it goes stale silently.** Re-cut it after *any*
 > change to the code or the lab scripts. A stale disc does not announce itself:
 > the guest reports "no such file" for a script that is sitting in your editor,
 > or — worse — runs an older version of one that exists on both. This has
-> already happened once, on 2026-08-12, when `LabRepo.iso` predated
-> `lab_engine_setup.sh` and did not contain it at all.
+> already happened twice: on 2026-08-12 `LabRepo.iso` predated
+> `lab_engine_setup.sh` and did not contain it at all, and on 2026-08-13 a
+> "fixed" script was tested against a disc that had never received the fix. The
+> build script's final step exists for exactly that second case — it hashes the
+> file on the disc against the working copy rather than trusting the copy.
 
-### Attach it
+### Attaching, if you are doing it by hand
 
-A VM has **one** DVD drive, so attaching is a swap of the path rather than an
-addition. The VM may be running or off:
+`build_repo_iso.ps1 -AttachTo` covers this. By hand: a VM has **one** DVD drive,
+so attaching is a swap of the path rather than an addition, and the VM may be
+running or off.
 
 ```powershell
-Set-VMDvdDrive -VMName LabClient -Path <drive>:\LabRepo.iso
+Get-VMDvdDrive -VMName LabClient | Set-VMDvdDrive -Path <drive>:\LabRepo.iso
+Get-VMDvdDrive -VMName LabClient                    # must show DvdMediaType : ISO
 ```
 
-`Get-VMDvdDrive -VMName LabClient` shows what is loaded now. If you ever need
-both discs at once, `Add-VMDvdDrive` gives a second drive — not needed here,
-since Windows is installed by the time this disc is wanted.
+**Check `DvdMediaType`, not the path.** A path with `DvdMediaType : None` behind
+it means the drive is empty and the guest is still reading whatever it had. If
+you ever need both discs at once, `Add-VMDvdDrive` gives a second drive — not
+needed here, since Windows is installed by the time this disc is wanted.
 
 *In the VM* the disc appears as **`D:`**, labelled `LABREPO`:
 
@@ -544,16 +556,40 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 
 ---
 
+## What is scripted, and what you do by hand
+
+| Stage | Who does it | Why |
+|---|---|---|
+| Storage, switch, host address, firewall, both VMs | `setup_lab_vms.ps1` | Scripted |
+| **Install Windows in LabClient** | **you** | Setup and OOBE are interactive. An `unattend.xml` could drive it, but the lab is built twice in this project's life and an answer file that drifts is worse than a table of answers you can read. The trimmed-image route was tried and abandoned — `issues.md` D9 |
+| **Install Python in LabClient** | **you** | The two choices that matter — *install for all users* and *disable path length limit* — are on the installer's first and last screens, and both fail late and misleadingly when missed |
+| Venv, packages, Defender, static address | `lab_client_setup.ps1` | Scripted |
+| Cut the repo disc and swap it into a VM | `build_repo_iso.ps1` | Scripted, including the eject-copy-attach dance and verifying the disc afterwards |
+| **Copy the repo off `D:` inside LabClient** | **you** | Two commands, and the script that would do it lives on the disc being copied |
+| **Install Debian in LabEngine** | **you** | Same reasoning as Windows. A preseed file is possible and is one more artefact to maintain, get wrong, and keep in step with a procedure that already documents every answer |
+| **`umount /mnt` before re-cutting the disc** | **you** | The host cannot take a medium away from a guest that has it mounted. Nothing on the host can reach inside the guest to do this |
+| **`mount -o ro /dev/sr0 /mnt` in LabEngine** | **you** | Irreducible: the provisioning script *is on the disc*, so something has to mount it before anything can run. One command |
+| `python3`, `sqlite3` check, repo copy, static IP, `--check` | `lab_engine_setup.sh` | Scripted, and it reuses the mount you already made |
+| Memory, checkpoint policy, switch replug, `baseline` | `lab_host_finalize.ps1` | Scripted, per VM, VM off |
+| Read a guest's screen | `vm_console_shot.ps1` | Scripted — works at a boot menu or mid-installer |
+| **The T0.1 / T0.2 gate** | **you** | Two commands, and the point is to look at the result |
+
+The pattern: **anything interactive by nature stays manual and is documented
+answer by answer; anything mechanical is a script that checks its own work.**
+The manual steps are exactly the OS installers, the one mount that bootstraps
+everything else, and the gate you are meant to read.
+
 ## The scripts
 
 | Script | Where | When |
 |---|---|---|
 | `scripts/setup_lab_vms.ps1` | host | Step 1 — once, before anything |
+| `scripts/build_repo_iso.ps1` | host | Step 4, and again after **any** code or script change |
 | `scripts/lab_client_setup.ps1` | in LabClient | Step 5 — after Windows and Python |
 | `scripts/lab_host_finalize.ps1` | host | Steps 6 and 9 — per VM, VM off |
 | `scripts/lab_engine_setup.sh` | in LabEngine | Step 8 — after Debian |
 
-All four are **idempotent** and take `-DryRun` (`DRY_RUN=1` for the shell one).
+All five are **idempotent** and take `-DryRun` (`DRY_RUN=1` for the shell one).
 Re-running after fixing one thing is safe and is the intended way to use them.
 
 `scripts/build_client_image.ps1` is **not** part of this procedure — see

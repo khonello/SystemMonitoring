@@ -1017,13 +1017,23 @@ with the most free space and finds both ISOs by pattern.
 | Script | Runs on | When |
 |---|---|---|
 | `scripts/setup_lab_vms.ps1` | host | once, before anything — storage, switch, host address and firewall, both VMs |
+| `scripts/build_repo_iso.ps1` | host | whenever code or a lab script changes — cuts `LabRepo.iso`, swaps it into a VM's DVD drive, and verifies the disc against the working copy |
 | `scripts/lab_client_setup.ps1` | inside LabClient | after Windows and Python — venv, packages, Defender exclusions, optional trim, `--check`, then `-SetNetwork` last |
 | `scripts/lab_engine_setup.sh` | inside LabEngine | after Debian — `python3`, the `sqlite3` gate, the repo, the static address, `--check` |
 | `scripts/lab_host_finalize.ps1` | host | per VM, with the VM off — Dynamic Memory, checkpoint policy, the `LabMonitor` replug, the `baseline` checkpoint |
 
-All four are idempotent and take `-DryRun` (`DRY_RUN=1` for the shell one).
+All five are idempotent and take `-DryRun` (`DRY_RUN=1` for the shell one).
 Re-running after fixing one thing is the intended way to use them, not a
 recovery path.
+
+**What stays manual, and why that is a decision rather than an omission.** The
+two OS installs and the one `mount` that bootstraps the Engine are deliberately
+not automated. `unattend.xml` and a Debian preseed would both work, and both
+would be another artefact to maintain, drift, and debug at the worst possible
+moment — for a lab built twice in this project's lifetime, a table of answers
+you can read beats a file you have to trust. The mount is irreducible in a
+different way: the provisioning script lives *on the disc*, so something has to
+mount it before anything can run. `LAB-SETUP.md` has the full split.
 
 **The scripts enforce what this document only explains.** Each refusal exists
 because the failure it prevents is silent or misleading: Store Python is refused
