@@ -23,8 +23,12 @@
     the guest is not touching, which is a bigger win than anything inside the
     guest.
 
-    The Engine VM is left on static memory: Dynamic Memory needs the guest
-    balloon driver and buys nothing at 512 MB.
+    The Engine VM stays on static memory -- Dynamic Memory needs the guest
+    balloon driver and buys nothing at this size -- but it is CUT BACK here,
+    from the 2 GB it was created with to the 512 MB it runs in. 512 MB is a
+    runtime figure, not an install-time one: Debian 13's installer drops into
+    low-memory mode below roughly a gigabyte and starts asking which udebs to
+    load, which is how this was found (2026-08-12).
 
 .PARAMETER VMName
     Which VM to finish. Memory settings are chosen from the name.
@@ -83,7 +87,19 @@ Ok "'$VMName' is Off"
 Step '1. Memory'
 
 if ($VMName -eq 'LabEngine') {
-    Skip 'Engine VM stays on static 512 MB -- Dynamic Memory needs the balloon driver and buys nothing at this size'
+    # The Engine runs in 512 MB, but it cannot be INSTALLED in 512 MB: Debian 13's
+    # installer drops into low-memory mode below roughly a gigabyte and starts
+    # asking which udebs to load. So the VM is created with 2 GB and cut back
+    # here, exactly as the client VM is created with 4 GB and converted here.
+    # This step is what makes that reduction happen -- it must set, not skip.
+    if (-not $vm.DynamicMemoryEnabled -and $vm.MemoryStartup -eq 512MB) {
+        Skip 'static 512 MB already'
+    } else {
+        Doing 'static 512 MB -- install-time 2 GB is no longer needed, and Dynamic Memory needs a balloon driver that buys nothing at this size'
+        if (-not $DryRun) {
+            Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes 512MB
+        }
+    }
 } else {
     if ($vm.DynamicMemoryEnabled -and $vm.MemoryStartup -eq 2GB) {
         Skip 'Dynamic Memory already 2 GB / 1 GB / 3 GB'

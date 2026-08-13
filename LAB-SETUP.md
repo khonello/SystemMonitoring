@@ -227,8 +227,52 @@ replug, and the **baseline** checkpoint.
 
 Same console rule as step 2: **console open first, then Action → Start.**
 
-At the installer, **deselect everything in tasksel** — no desktop, no print
-server. Keep *standard system utilities*. Set a root password you'll remember.
+The VM is created with **2 GB** for this, and step 9 cuts it back to the 512 MB
+the Engine runs in. Do not install at 512 MB: Debian 13 drops into low-memory
+mode and stops to ask which installer components to load.
+
+### Screen by screen
+
+Every answer below was walked on 2026-08-12/13. The ones in bold are the ones
+that are not the default, or that cost time here.
+
+| Screen | Answer | Why |
+|---|---|---|
+| GRUB boot menu | **Install**, not *Graphical install* | The ncurses installer is lighter and behaves better over VMConnect. The GTK one buys nothing on a headless server |
+| Language / location / keyboard | English, your locale, US or your layout | Cosmetic |
+| Hostname | **`labengine`** | Cosmetic. Nothing on this switch resolves by name, and TLS verifies the fixed identity `labmonitor-engine` from the certificate, **not** the machine's hostname |
+| Domain name | **blank** | There is no domain. An invented one only shows up later in prompts |
+| Root password | anything you'll remember | `lab_engine_setup.sh` needs root |
+| Full name for the new user | **`lab`** | Mirrors LabClient's account, so both guests share one credential |
+| Username / password | `lab` / `lab` | As above |
+| Partitioning method | **Guided — use entire disk** | Not LVM, not encrypted. Nothing here needs either, and a plain layout is one less thing to explain at the defence |
+| Disk | the 8 GB virtual disk (the only one) | |
+| Partitioning scheme | **All files in one partition** | |
+| Write changes | **Finish partitioning** → **Yes** | First irreversible step. Everything before it lives in RAM, so a restart up to here is free |
+| Scan extra installation media | **No** | One disc, and it has what the base system needs |
+| Debian archive mirror — country | **`enter information manually`**, at the very top of the list | **Ghana is not in the list** — the list only holds countries that host a mirror. Picking a random neighbour is worse than the CDN |
+| Mirror hostname / directory | **`deb.debian.org`** / `/debian` | Anycast CDN: it resolves to whichever mirror is genuinely nearest, from anywhere |
+| HTTP proxy | blank | |
+| Popularity contest | No | |
+| **tasksel** (software selection) | **untick everything except *standard system utilities*.** SSH server optional | See below |
+| GRUB bootloader | Yes, to the disk (`/dev/sda`) | |
+
+This step needs the internet, which the VM has because it is still on the
+**Default Switch**. It moves to the isolated `LabMonitor` switch at step 9.
+
+### What tasksel is, and why every doc here shouts about it
+
+`tasksel` — "task select" — is Debian's software-selection screen, a checkbox
+list of package bundles: *Debian desktop environment*, *GNOME*, *web server*,
+*print server*, *SSH server*, *standard system utilities*. **Space** toggles;
+Enter accepts the page with whatever is currently ticked, which is how a desktop
+gets installed by accident.
+
+Untick everything except **standard system utilities** — that bundle is what
+gives a usable shell environment and brings `python3` with it, which is the
+Engine's entire dependency list. A desktop would cost roughly a gigabyte of disk
+and a working set this VM does not have at its runtime 512 MB, on a machine
+whose only job is a headless asyncio process.
 
 Then swap the Debian netinst out for the repo disc. LabEngine's single DVD drive
 is holding the installer media until now, and Debian is on the VHDX by this
@@ -330,6 +374,9 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 | `Get-VM` says `Running` but nothing responds | Same as the first row | As above |
 | Windows Setup refuses: "This PC can't run Windows 11" | TPM off. Gen 2 VMs have a virtual one but it is off by default and the wizard never offers it | `setup_lab_vms.ps1` enables it. By hand: *Settings → Security → Enable TPM*, VM off |
 | Debian won't boot at all | Secure Boot template defaults to *MicrosoftWindows* | Template must be **MicrosoftUEFICertificateAuthority**, or off |
+| Debian installer says *Low memory mode* and asks which installer components to load | The Engine VM has 512 MB. Debian 13 drops into low-memory mode below roughly a gigabyte — 512 MB is the figure the Engine **runs** in, not one it installs in | Power off, `Set-VMMemory LabEngine -StartupBytes 2GB`, install, and let step 9 cut it back. The scripts now do both halves |
+| Your country is not in the Debian mirror list | The list holds only countries that host a mirror. Ghana does not | Top of the list → **`enter information manually`** → `deb.debian.org`, `/debian`. The CDN beats any hand-picked neighbour |
+| The Debian installer is sluggish, or its window is awkward over VMConnect | *Graphical install* was chosen at the GRUB menu | Reboot the VM and take plain **Install**. Nothing in this build needs the GTK installer |
 | OOBE loops back to "choose country or region" forever | Trimmed/debloated media — OOBE completion is never recorded | Use **stock** media. `issues.md` D9 |
 | `OOBEMSAHELLO` / `OOBELOCALHELLO`, "Something went wrong" | Windows Hello components stripped from trimmed media | Click **Skip**. Or use stock media and it doesn't happen |
 | "Type a different user name" for `lab` | The account already exists from a previous OOBE pass | Symptom of the loop above, not a naming problem |
@@ -367,3 +414,20 @@ Re-running after fixing one thing is safe and is the intended way to use them.
 
 `scripts/build_client_image.ps1` is **not** part of this procedure — see
 `issues.md` D9.
+
+### Reading a guest's console without looking at it
+
+```powershell
+.\scripts\vm_console_shot.ps1 -VMName LabEngine
+```
+
+Saves a PNG of whatever is on the guest's screen, read from the host through
+Hyper-V's WMI thumbnail API — no agent in the guest, no integration services, no
+network, nothing typed. It works at a boot menu or mid-installer, which is
+precisely when nothing else can see anything, and it makes the screen quotable
+in a log or to someone helping remotely.
+
+It is a diagnostic aid, not part of the procedure. It earned its way in here on
+2026-08-13: the Debian installer had stopped on a list of kernel udebs that
+reads exactly like expert mode, and the words that named the actual cause —
+*Low memory mode* — were four small words in the top-left corner.

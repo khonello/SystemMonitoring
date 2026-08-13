@@ -30,6 +30,10 @@
         static 4 GB and switches afterwards, because Windows Setup misbehaves
         under a moving allocation. The script prints the reminder and the exact
         numbers at the end.
+      - The Engine VM's final 512 MB. It is created with 2 GB because Debian 13
+        installs in low-memory mode below roughly a gigabyte, and stops to ask
+        which udebs to load. Both VMs are therefore created at install-time
+        sizes and cut to runtime sizes by lab_host_finalize.ps1.
       - The LabMonitor adapter on either VM. Both are created on Default Switch
         for provisioning internet and move to LabMonitor afterwards
         (testing.md 0.1d step 8, 0.1f step 6).
@@ -392,7 +396,13 @@ New-LabVm -Name $ClientName -MemoryBytes 4GB -Cpu 2 -DiskBytes 64GB `
 
 Step "4. Engine VM '$EngineName'  (testing.md 0.1f)"
 if ($haveEngineIso) {
-    New-LabVm -Name $EngineName -MemoryBytes 512MB -Cpu 1 -DiskBytes 8GB `
+    # 2 GB to INSTALL, 512 MB to RUN. Debian 13's installer drops into low-memory
+    # mode below roughly a gigabyte -- it stops on "Load installer components from
+    # installation media" and asks which udebs it should load, which is a menu no
+    # normal install shows and no part of this lab needs. lab_host_finalize.ps1
+    # cuts it back to 512 MB afterwards, the same shape as the client VM being
+    # created at 4 GB and converted to Dynamic Memory there.
+    New-LabVm -Name $EngineName -MemoryBytes 2GB -Cpu 1 -DiskBytes 8GB `
               -Iso $EngineIso -SecureBootTemplate 'MicrosoftUEFICertificateAuthority' -EnableTpm $false
 } else {
     Warn 'skipped -- no Debian ISO. Re-run this script after downloading it.'
@@ -456,7 +466,12 @@ Step 'Done. What is left, in order:'
        Nothing to pip install; run from the repo root so common/ resolves.
     5. Static 192.168.100.2/24, no gateway, in /etc/network/interfaces.
     6. python3 -m engine --check
-    7. Checkpoint "baseline".
+    7. SHUT DOWN, then cut memory back to what the Engine runs in:
+         Set-VMMemory -VMName $EngineName -StartupBytes 512MB
+       Static 2 GB was only for the installer -- Debian 13 goes into
+       low-memory mode below roughly a gigabyte. lab_host_finalize.ps1
+       does this for you.
+    8. Checkpoint "baseline".
 
   GATE (testing.md 0.4)
     Test-NetConnection 192.168.100.2 -Port 5000   from the client VM

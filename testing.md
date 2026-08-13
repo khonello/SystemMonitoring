@@ -837,7 +837,7 @@ Debian 11 was downloaded first here and thrown away for exactly this.
 |---|---|---|
 | Generation | **2** | UEFI, matching the client VM. Cannot be changed after creation |
 | Secure Boot | template ***Microsoft UEFI Certificate Authority***, or off | A Gen 2 VM defaults to the *Microsoft Windows* template, which **will not boot Debian** and fails without naming the reason. This is the setting that costs an evening |
-| Memory | **512 MB, static** | Dynamic Memory needs the guest balloon driver and buys nothing at this size |
+| Memory | **2 GB static to install, 512 MB static to run** | 512 MB is what the Engine *runs* in; it is not enough to *install* in. Debian 13's installer drops into low-memory mode below roughly a gigabyte and stops to ask which udebs to load — a menu no normal install shows. `setup_lab_vms.ps1` creates the VM at 2 GB and `lab_host_finalize.ps1` cuts it back, the same shape as the client VM being created at 4 GB and converted to Dynamic Memory. Dynamic Memory is not used here: it needs the guest balloon driver and buys nothing at this size |
 | Virtual processors | 1 | The Engine is single-threaded asyncio |
 | Disk | 8 GB dynamic VHDX | ~4 GB used after install; dynamic, so it only grows into it |
 | Network | **Default Switch** to provision, `LabMonitor` afterwards | Same pattern as the client VM |
@@ -846,6 +846,30 @@ Debian 11 was downloaded first here and thrown away for exactly this.
 **At the installer**: deselect everything in tasksel — no desktop, no print
 server. Keep *standard system utilities*, and the SSH server if offered, since
 `scp` is an easier way to get the repository in than the Hyper-V console.
+`LAB-SETUP.md` step 7 lists every screen and the answer given to it; the four
+that carry reasoning rather than taste are:
+
+- **Take `Install`, not `Graphical install`, at the GRUB menu.** The ncurses
+  installer is lighter and reads better over VMConnect, and the GTK one buys
+  nothing on a machine that will never have a display server.
+- **The hostname is cosmetic.** Nothing on the isolated switch resolves by name,
+  and TLS verifies the fixed identity `labmonitor-engine` carried in the
+  certificate rather than the machine's hostname (§0.4) — which is the whole
+  reason the Engine's address can change without reissuing anything.
+- **The mirror country list only holds countries that host a mirror**, so it
+  will not contain yours in much of the world — Ghana is absent. Take
+  `enter information manually` at the top of the list and use `deb.debian.org`,
+  the anycast CDN, rather than picking a plausible-looking neighbour.
+- **The user account is `lab`/`lab`,** matching LabClient, so one credential
+  covers both guests on the day.
+
+**Seeing what the guest is actually showing.** `scripts/vm_console_shot.ps1`
+saves a PNG of the console straight from the host through Hyper-V's WMI
+thumbnail API — no agent, no integration services, no network, nothing typed
+into the guest — so it works at a boot menu or halfway through an installer,
+which is when nothing else can. That is how the low-memory banner above was
+found: the screen it produced looked like expert mode, and the four words naming
+the real cause were in the top-left corner.
 
 **Provisioning, in order:**
 
