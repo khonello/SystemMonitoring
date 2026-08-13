@@ -1236,9 +1236,63 @@ connecting. USB events stay empty in the VM regardless — Hyper-V has no plain
 USB pass-through, which is why `testing.md` runs T2.2 on the host (section D8's
 neighbourhood, and the reason is hardware, not code).
 
----
+### C19. Telemetry intervals are a spec default, unexplained and unconfigurable
 
-## D — Accepted limitations
+**Raised 2026-08-13, watching the real system.** Network data arrives every 60
+seconds, which is slow next to what an operator expects from a monitoring
+console. The question was whether that is a considered trade-off or an
+inherited number. It is the second: the README lists the intervals under *Data
+Collection Intervals* and explains exactly one of them — idle time rides on the
+heartbeat because it is a single integer in a message already being sent.
+Nothing justifies 60 over 30 or 10.
+
+**What the number actually costs, at the 50-client design ceiling:**
+
+| Interval | Writes/s | Rows over 30-day retention |
+|---|---|---|
+| 60s (today) | ~0.8 | ~2.2M |
+| 10s | ~5 | ~13M |
+| 5s | ~10 | ~26M |
+
+Three things scale with it, and only the first is obvious:
+
+1. **Write cost.** Engine writes are synchronous on the event loop, and that is
+   a decision made *by measurement* rather than by assumption — `bench_database`
+   exists to justify it, and the standing rule is to re-run it before changing
+   write volume. Lowering this interval is precisely that change.
+2. **Query cost.** B4 was summary queries growing with table size, solved by
+   retention. Multiplying row counts by 6 or 12 walks back toward it.
+3. **Fanout.** Telemetry goes to every connected admin (section D), so relay
+   work is rate × admins, not rate.
+
+**The design conflates two different things, which is the real finding.** A
+live view of the machine an operator is *watching* wants 1–5 second updates and
+does not need to be persisted at all. A recorded series for reports wants to be
+coarse, stored and retained. This project sends one stream serving both, so the
+interval is forced into a compromise: fast enough to feel live, cheap enough to
+keep for 30 days across 50 machines. Every real console separates them.
+
+**Proposal, in order:**
+
+1. **Make the intervals configurable.** `common/constants.py` reads no
+   environment at all, which is inconsistent with the rest of the project's
+   config — everything else is env-driven and read into `Final` constants at
+   import. Today, changing a sample rate means editing a constant and re-cutting
+   the lab disc. This is small, and it is the prerequisite for measuring
+   anything.
+2. **Then measure.** Re-run `bench_database` at the candidate rate before
+   adopting it, as the project's own rule requires.
+3. **Then, if the live feel is still the goal, split the streams** — a client
+   whose id is *selected* by an admin sends network samples at a fast cadence
+   for the duration, persisted at the normal rate or not persisted at all. This
+   scopes the extra traffic to one machine at a time instead of multiplying it
+   by the fleet, and it pairs naturally with C17's fleet view and C18's live
+   tabs, which are the surfaces that would show it.
+
+**Not blocking anything.** Phase 5 measures the system as built, and 60s is
+correct for reporting. This is a Phase 6 item at the earliest — after
+integration and load testing, which is where the write-cost question gets a
+real answer rather than an estimate.
 
 **Deliberate decisions not to build something, recorded so they are not
 mistaken for oversights.** Nothing here is scheduled. Each entry says what was
