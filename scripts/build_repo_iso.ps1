@@ -120,7 +120,18 @@ if (-not $DryRun) {
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     # .venv is host-built Windows binaries; __pycache__ is bytecode from the
     # host's interpreter; .pytest_cache is scratch. All three are wrong on a guest.
-    robocopy $RepoPath $stage /E /XD .venv __pycache__ .pytest_cache /NFL /NDL /NJH /NJS | Out-Null
+    #
+    # THE FILE EXCLUSIONS ARE NOT COSMETIC. monitoring.db is the DEV BOX's
+    # database. Gitignored, so a clone never sees it -- but this disc is
+    # deliberately a copy of the working directory, which is the very mechanism
+    # that carries certs/ to the guests, and it carries everything else ignored
+    # along with it. On 2026-08-13 that put a phantom client, 'lab1-pc-01' at
+    # 127.0.0.1 from testing on this laptop, into the lab Engine's roster, where
+    # it showed up in the Admin's sidebar as a machine that does not exist.
+    robocopy $RepoPath $stage /E `
+             /XD .venv __pycache__ .pytest_cache `
+             /XF monitoring.db *.db *.db-journal .coverage `
+             /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
     Ok "$((Get-ChildItem $stage -Recurse -File).Count) files staged"
 }

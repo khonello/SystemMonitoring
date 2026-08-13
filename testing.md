@@ -1414,8 +1414,8 @@ Integration should not start until:
 | T4.4 overlay pause | | |
 | T4.5 Task Manager | | |
 | T4.6 Alt-Tab | | |
-| T5.1 registration | | |
-| T5.2 admin end to end | | |
+| T5.1 registration | **PASS** 2026-08-13 | `Registered client 'LabClient-1-Windows' (1 live)`, heartbeats every ~15s (idle 1.4s → 16.4s → 31.4s), NETWORK_DATA and APP_DATA arriving on their own intervals, 52 applications stored. Every hop narrated under its own trace id |
+| T5.2 admin end to end | **PASS** 2026-08-13 | Admin registered as `admin-LAPTOP-KHONELLO` and heartbeats like a client; telemetry lines flipped from `to 0 admin peers` to `to 1 admin peers`. Roster showed a phantom `lab1-pc-01` until the dev box's monitoring.db was removed from the disc — see the pitfalls table |
 | T5.3 reconnect | | |
 | T5.5 service overlay | | |
 | T5.6 watchdog overlay | | |
