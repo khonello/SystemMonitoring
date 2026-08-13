@@ -863,6 +863,18 @@ that carry reasoning rather than taste are:
 - **The user account is `lab`/`lab`,** matching LabClient, so one credential
   covers both guests on the day.
 
+**tasksel is the one screen that can silently cost the VM.** Space toggles the
+highlighted entry; Enter accepts the entire page as it stands, from anywhere on
+it. Pressing Enter to clear a highlighted checkbox therefore confirms it
+instead — which is what happened on 2026-08-13, and the desktop entries are
+ticked by default. The symptom is immediate and unambiguous if you know to look:
+*Select and install software* reporting **four-digit** file counts (1882, in
+that instance) where a minimal install pulls a few hundred. Recovery is to power
+off and redo the install, not to purge afterwards — a purged desktop task leaves
+residue and `gdm` enabled on a headless machine, and at that stage the VM holds
+nothing worth saving, since the repository does not arrive until after Debian is
+installed.
+
 **Seeing what the guest is actually showing.** `scripts/vm_console_shot.ps1`
 saves a PNG of the console straight from the host through Hyper-V's WMI
 thumbnail API — no agent, no integration services, no network, nothing typed

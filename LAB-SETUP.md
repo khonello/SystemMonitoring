@@ -264,9 +264,17 @@ This step needs the internet, which the VM has because it is still on the
 
 `tasksel` — "task select" — is Debian's software-selection screen, a checkbox
 list of package bundles: *Debian desktop environment*, *GNOME*, *web server*,
-*print server*, *SSH server*, *standard system utilities*. **Space** toggles;
-Enter accepts the page with whatever is currently ticked, which is how a desktop
-gets installed by accident.
+*print server*, *SSH server*, *standard system utilities*. **Space** toggles the
+highlighted line; **Enter accepts the whole page as it stands**, wherever the
+cursor is. That is not a warning in the abstract — it happened here on
+2026-08-13. Enter was pressed *intending to untick* the highlighted desktop
+entry, and instead confirmed the page with the desktop still selected; the next
+screen was *Select and install software* retrieving 1882 files.
+
+**The count is the tell.** A minimal install pulls a few hundred files. If that
+progress line reads four digits, a desktop is going in — power off and redo the
+install rather than trying to purge it afterwards. Nothing is lost at that
+point: the repository does not reach this VM until step 8.
 
 Untick everything except **standard system utilities** — that bundle is what
 gives a usable shell environment and brings `python3` with it, which is the
@@ -377,6 +385,8 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 | Debian installer says *Low memory mode* and asks which installer components to load | The Engine VM has 512 MB. Debian 13 drops into low-memory mode below roughly a gigabyte — 512 MB is the figure the Engine **runs** in, not one it installs in | Power off, `Set-VMMemory LabEngine -StartupBytes 2GB`, install, and let step 9 cut it back. The scripts now do both halves |
 | Your country is not in the Debian mirror list | The list holds only countries that host a mirror. Ghana does not | Top of the list → **`enter information manually`** → `deb.debian.org`, `/debian`. The CDN beats any hand-picked neighbour |
 | The Debian installer is sluggish, or its window is awkward over VMConnect | *Graphical install* was chosen at the GRUB menu | Reboot the VM and take plain **Install**. Nothing in this build needs the GTK installer |
+| *Select and install software* is retrieving **1000+ files** | A desktop is being installed. Enter on the tasksel page **accepts what is ticked** — it does not toggle the highlighted line, and the desktop entries are ticked by default | Power off and redo the install. ~8 minutes, versus untangling a desktop from an 8 GB disk. A minimal install retrieves a few hundred files, not thousands — that count is the tell |
+| Tempted to `apt purge` the desktop instead of reinstalling | A purged desktop task leaves residue, and `gdm` will have been enabled on a headless box | Reinstall. The VM holds nothing yet — the repo arrives at step 8, after this |
 | OOBE loops back to "choose country or region" forever | Trimmed/debloated media — OOBE completion is never recorded | Use **stock** media. `issues.md` D9 |
 | `OOBEMSAHELLO` / `OOBELOCALHELLO`, "Something went wrong" | Windows Hello components stripped from trimmed media | Click **Skip**. Or use stock media and it doesn't happen |
 | "Type a different user name" for `lab` | The account already exists from a previous OOBE pass | Symptom of the loop above, not a naming problem |
