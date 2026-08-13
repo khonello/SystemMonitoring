@@ -177,6 +177,76 @@ What it does under the hood, and why:
 > build script's final step exists for exactly that second case — it hashes the
 > file on the disc against the working copy rather than trusting the copy.
 
+### When the disc disappears from a guest
+
+This will happen while you are iterating, and it is worth knowing cold, because
+every symptom points at the guest and every cause is on the host.
+
+**What it looks like**
+
+| Where | Symptom |
+|---|---|
+| LabEngine | `mount: /mnt: fsconfig() failed: /dev/sr0: Can't open blockdev` |
+| LabEngine | `mount: no medium found on /dev/sr0` |
+| LabEngine | A `/mnt` that worked a minute ago now lists nothing, or old files |
+| LabClient | `D:` vanishes, or Explorer offers to "insert a disc" |
+
+**Why it happens.** The host owns the medium and can take it away at any moment,
+including by accident:
+
+1. **Something on the host touched the ISO file.** Re-cutting it is the obvious
+   case. The non-obvious one is *inspecting* it — `Mount-DiskImage` on the host
+   pulls the disc out of every guest holding it, which is why
+   `build_repo_iso.ps1` verifies the temporary copy before anything is attached
+   rather than the placed one afterwards.
+2. **An attach reported success and left the drive empty.** `Set-VMDvdDrive` can
+   return a path with `DvdMediaType : None` behind it. The path is not the
+   media.
+3. **The guest is holding a stale device.** Media that was swapped underneath a
+   mounted filesystem can leave the kernel unable to open `/dev/sr0` even after
+   a correct re-attach.
+
+**What to do, host first — the guest is the wrong place to start**
+
+```powershell
+Get-VMDvdDrive -VMName LabEngine          # read DvdMediaType, not Path
+```
+
+- **`DvdMediaType : ISO`** and the right path → the host is fine, go to the
+  guest steps below.
+- **`DvdMediaType : None`** → the drive is empty. Re-attach and *watch it*,
+  because it can drop again seconds later:
+
+```powershell
+Get-VMDvdDrive -VMName LabEngine | Set-VMDvdDrive -Path <drive>:\LabRepo.iso
+1..4 | ForEach-Object { Start-Sleep 3; (Get-VMDvdDrive -VMName LabEngine).DvdMediaType }
+```
+
+Four `ISO` in a row means it has settled. Anything else, re-issue it.
+
+**Then in the guest**
+
+```sh
+umount /mnt                       # "not mounted" is fine, it is a no-op
+mount -o ro /dev/sr0 /mnt
+```
+
+**If that still fails, `reboot`.** Twenty seconds, and it clears the stale
+device state completely. Do not keep retrying the mount — nothing in the guest
+changes between attempts, so a second failure will not be different from the
+first. On LabClient the disc simply reappears as `D:` after a reboot.
+
+**How to not need any of this**
+
+- Re-cut the disc with the guests **shut down** when you can.
+- `umount /mnt` in the guest *before* re-cutting, always.
+- Never mount the lab ISO on the host while a guest has it attached.
+- Check `DvdMediaType` after every attach — the script does this for you.
+- **For iterating rather than bootstrapping, prefer the network.** LabEngine has
+  `sshd` and a fixed address, so `scp` from the host updates it without touching
+  the disc at all. The ISO exists for a machine with no network, no account and
+  no tooling; once the lab is up, that is no longer the situation you are in.
+
 ### Attaching, if you are doing it by hand
 
 `build_repo_iso.ps1 -AttachTo` covers this. By hand: a VM has **one** DVD drive,

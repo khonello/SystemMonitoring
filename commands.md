@@ -340,9 +340,10 @@ and move to `LabMonitor` by hand later.
 
 ---
 
-## Lab provisioning — the three guest/host scripts
+## Lab provisioning — the guest/host scripts
 
-`setup_lab_vms.ps1` creates the VMs; these three fill them in.
+`setup_lab_vms.ps1` creates the VMs; these fill them in, keep them fed
+with current code, and let you see their screens.
 [`LAB-SETUP.md`](LAB-SETUP.md) is the step-by-step order. All are idempotent,
 all take a dry-run switch, and **all need an elevated shell** (root, for the
 shell script).
@@ -372,7 +373,8 @@ the read-only attribute that files copied off `LabRepo.iso` carry.
 ### `lab_engine_setup.sh` — inside LabEngine
 
 ```sh
-sh /mnt/scripts/lab_engine_setup.sh          # DRY_RUN=1 to preview
+sh /mnt/scripts/lab_engine_setup.sh              # DRY_RUN=1 to preview
+REFRESH=1 sh /mnt/scripts/lab_engine_setup.sh    # copy a newer disc over an existing tree
 ```
 
 POSIX `sh`, not bash — a netinst with everything deselected has `dash`. Installs
@@ -380,7 +382,62 @@ POSIX `sh`, not bash — a netinst with everything deselected has `dash`. Instal
 persistence and it is the one stdlib module a stripped build can lack), copies
 the repo off `/dev/sr0`, writes the static address with **no gateway line**, and
 runs `engine --check`. Rejects Debian 11 by `VERSION_ID` — Python 3.9 is under
-the floor. Overrides: `REPO`, `STATIC_IP`, `NETMASK`.
+the floor.
+
+| Override | Default | What it is |
+|---|---|---|
+| `REPO` | `/opt/SystemMonitoring` | Where the repository lands |
+| `RUN_AS` | `lab` | **The account that will run the Engine.** The script runs as root, so everything it copies is root-owned, and `chmod u+w` grants write to the *owner* — not to whoever serves. Without the `chown` this drives, the Engine accepts a client and dies on `attempt to write a readonly database`. `--check` is also run as this user, since a check under a different identity than the program proves nothing about the program |
+| `REFRESH` | `0` | `1` copies a newer disc over an existing tree. Without it an existing repository is left alone, which is right for provisioning and useless for iterating |
+| `STATIC_IP` / `NETMASK` | `192.168.100.2` / `255.255.255.0` | Address on the isolated switch |
+| `DRY_RUN` | `0` | Print, change nothing |
+
+It **reuses a mount you already made** rather than creating its own. You reach
+this script by mounting the disc, so an earlier version's `mkdir /mnt/labrepo`
+tried to create a directory inside the read-only medium it had just been handed.
+
+### `build_repo_iso.ps1` — host, whenever code changes
+
+```powershell
+.\scripts\build_repo_iso.ps1 [-AttachTo LabEngine,LabClient] [-RepoPath <path>]
+                             [-IsoPath <drive>:\LabRepo.iso] [-DryRun]
+```
+
+Cuts `LabRepo.iso` from the working copy and swaps it into the named VMs. Finds
+the lab drive itself. Stages with `robocopy` (dropping `.venv`, `__pycache__`,
+`.pytest_cache`, and **`*.db`** — the dev box's `monitoring.db` otherwise puts a
+phantom client in the lab Engine's roster), images with `oscdimg`, then:
+
+- **Verifies before attaching, never after.** Mounting an ISO on the host takes
+  the medium from every guest holding it, so checking the placed file would
+  empty both drives — the guest then fails with `Can't open blockdev`, which
+  reads as a guest fault.
+- Confirms the scripts and both `.pem` files are physically on the image, and
+  hashes `lab_engine_setup.sh` against the working copy. Presence is not
+  freshness: a "fixed" script was once tested against a disc that never
+  received the fix.
+- **Refuses CRLF in any `.sh`.** dash reports it as `set: Illegal option -`,
+  naming neither the file nor the cause. `.gitattributes` pins these to LF, but
+  anything writing a file outside git can undo that.
+- Ejects before copying (a running VM holds the image), then checks
+  `DvdMediaType` rather than the returned path, and retries once.
+
+It cannot `umount` inside a running guest — Linux holds the medium — so it
+detects that lock and names the fix. [`LAB-SETUP.md`](LAB-SETUP.md) has the
+recovery procedure for a disc that has dropped out of a guest.
+
+### `vm_console_shot.ps1` — host, any running VM
+
+```powershell
+.\scripts\vm_console_shot.ps1 -VMName LabEngine [-Width 800] [-Height 600] [-Out <path>]
+```
+
+Saves a PNG of a guest's console, read from the host through Hyper-V's WMI
+thumbnail API — no agent, no integration services, no network, nothing typed
+into the guest. It works at a boot menu or mid-installer, which is when nothing
+else can see anything, and it makes the screen quotable rather than described.
+A diagnostic aid, not part of the procedure. Drop to `640x480` if a larger
+request is refused: it cannot exceed the guest's current video mode.
 
 ### `lab_host_finalize.ps1` — host, per VM, VM off
 
