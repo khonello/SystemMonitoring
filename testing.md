@@ -863,9 +863,21 @@ that carry reasoning rather than taste are:
 - **The user account is `lab`/`lab`,** matching LabClient, so one credential
   covers both guests on the day.
 
-**tasksel is the one screen that can silently cost the VM.** Space toggles the
+- **The location list is a shortlist, not the world.** Ghana is not on the first
+  page; it is behind `other`, then `Africa`. Same lesson as the mirror screen
+  one step later, and worth separating in your head: the *location* list is
+  abbreviated for convenience, while the *mirror* list is genuinely limited to
+  countries that host a mirror.
+
+**tasksel is the one screen that can silently cost the VM**, and the reason it
+catches people is that every other screen has taught them the opposite habit:
+Enter confirms and moves on, everywhere, right up until this page. Here the page
+is a set of checkboxes rather than one answer, so Enter still means "accept as
+shown" and therefore *confirms* the line you meant to clear. Space toggles the
 highlighted entry; Enter accepts the entire page as it stands, from anywhere on
-it. Pressing Enter to clear a highlighted checkbox therefore confirms it
+it. Note also that clearing *Debian desktop environment* is not sufficient: the
+indented `... GNOME` beneath it is a separate task, ticked by default, and
+installs the desktop on its own. Pressing Enter to clear a highlighted checkbox therefore confirms it
 instead — which is what happened on 2026-08-13, and the desktop entries are
 ticked by default. The symptom is immediate and unambiguous if you know to look:
 *Select and install software* reporting **four-digit** file counts (1882, in

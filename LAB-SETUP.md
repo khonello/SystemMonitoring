@@ -236,10 +236,20 @@ mode and stops to ask which installer components to load.
 Every answer below was walked on 2026-08-12/13. The ones in bold are the ones
 that are not the default, or that cost time here.
 
+**Enter is the right key everywhere except one page.** On every screen in this
+table, Enter confirms the answer and moves on, exactly as you would expect —
+which is precisely why tasksel catches people. There, Enter still means "accept
+this page", but the page is a set of checkboxes rather than a single answer, so
+Enter pressed on a ticked line confirms it instead of clearing it. **Space** is
+the toggle. One page, one different key, and getting it wrong installs a full
+desktop.
+
 | Screen | Answer | Why |
 |---|---|---|
 | GRUB boot menu | **Install**, not *Graphical install* | The ncurses installer is lighter and behaves better over VMConnect. The GTK one buys nothing on a headless server |
-| Language / location / keyboard | English, your locale, US or your layout | Cosmetic |
+| Language | English | Cosmetic |
+| Location | **`other` → `Africa` → `Ghana`** | The first list is a short one of common choices, not the world. If your country is not on it, it is behind `other`, grouped by continent — it is not missing |
+| Keyboard | US, or your layout | Cosmetic |
 | Hostname | **`labengine`** | Cosmetic. Nothing on this switch resolves by name, and TLS verifies the fixed identity `labmonitor-engine` from the certificate, **not** the machine's hostname |
 | Domain name | **blank** | There is no domain. An invented one only shows up later in prompts |
 | Root password | anything you'll remember | `lab_engine_setup.sh` needs root |
@@ -275,6 +285,13 @@ screen was *Select and install software* retrieving 1882 files.
 progress line reads four digits, a desktop is going in — power off and redo the
 install rather than trying to purge it afterwards. Nothing is lost at that
 point: the repository does not reach this VM until step 8.
+
+**Clearing the parent line is not enough.** *Debian desktop environment* has the
+individual desktops indented beneath it — GNOME, Xfce, KDE Plasma, Cinnamon,
+MATE, LXDE, LXQt — and **`... GNOME` is separately ticked by default**. It is
+its own task: leaving it selected installs the desktop even with the parent
+cleared. Check that line specifically before continuing; it is the one that
+survives a careless pass.
 
 Untick everything except **standard system utilities** — that bundle is what
 gives a usable shell environment and brings `python3` with it, which is the
