@@ -24,6 +24,9 @@
 set -eu
 
 REPO="${REPO:-/opt/SystemMonitoring}"
+# Who will actually RUN the Engine. This script runs as root, so everything it
+# creates is owned by root -- and the Engine writes (it owns all persistence).
+RUN_AS="${RUN_AS:-lab}"
 STATIC_IP="${STATIC_IP:-192.168.100.2}"
 NETMASK="${NETMASK:-255.255.255.0}"
 HOST_IP="${HOST_IP:-192.168.100.1}"
@@ -129,6 +132,25 @@ else
     fi
 fi
 
+# OWNERSHIP, NOT JUST MODE. chmod u+w grants write to the OWNER, and everything
+# above ran as root, so the owner is root. The Engine runs as an ordinary user
+# and writes monitoring.db into this directory -- SQLite needs write on the file
+# AND on the directory, for its journal. Without this the Engine registers a
+# client and dies with "attempt to write a readonly database" (2026-08-13).
+#
+# This runs whether or not the copy just happened: an existing tree from an
+# earlier run has the same problem, and re-running the script is how it is fixed.
+if [ "$DRY_RUN" != "1" ]; then
+    if id "$RUN_AS" >/dev/null 2>&1; then
+        doing "chown -R $RUN_AS:$RUN_AS $REPO"
+        chown -R "$RUN_AS:$RUN_AS" "$REPO"
+    else
+        warn "no user '$RUN_AS' on this system -- $REPO stays owned by root"
+        warn 'the Engine will fail with "attempt to write a readonly database" unless it is run as root'
+        warn "re-run with RUN_AS=<user> once that account exists"
+    fi
+fi
+
 # certs/ is gitignored, so it reaches this machine only by copying rather than
 # cloning. TLS is presence-based: without it this VM would serve plaintext and
 # refuse the client, logging a refusal that does not name the cause.
@@ -176,9 +198,19 @@ fi
 say '4. python3 -m engine --check'
 
 if [ "$DRY_RUN" != "1" ]; then
+    # AS THE USER WHO WILL RUN THE ENGINE, not as root. A check run under a
+    # different identity than the program is a check that can lie: this one
+    # passed as root, printed "Database ready", and the Engine then failed on
+    # its first write as `lab` because the tree was root-owned (2026-08-13).
     # Run from the repo root so `common/` resolves -- there is no editable
     # install on this machine and none is needed.
-    ( cd "$REPO" && python3 -m engine --check )
+    if id "$RUN_AS" >/dev/null 2>&1; then
+        ok "running --check as $RUN_AS, the account that will run the Engine"
+        su - "$RUN_AS" -c "cd '$REPO' && python3 -m engine --check"
+    else
+        warn "no user '$RUN_AS' -- checking as root, which does NOT prove an ordinary user can write"
+        ( cd "$REPO" && python3 -m engine --check )
+    fi
     printf '\n  Check the transport line says TLS with a certificate path.\n'
     printf '  PLAINTEXT means the certificate is not where the Engine looks.\n'
     printf '  Check the authentication line does NOT say BYPASSED -- that is\n'

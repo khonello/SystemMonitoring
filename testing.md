@@ -922,6 +922,23 @@ consequences of choices made a screen or two earlier:**
   "correct" on the presentation machine: **re-run the test there**, because the
   answer belongs to whatever keyboard that machine has.
 
+**Ownership, not just permissions.** Everything the setup script creates is
+owned by **root**, because the script runs as root — and `chmod -R u+w` grants
+write to the *owner*, which is not the same thing as granting it to the person
+who will run the Engine. The Engine owns all persistence and writes
+`monitoring.db` into the repository directory, so a root-owned tree gives
+`sqlite3.OperationalError: attempt to write a readonly database` at the first
+client registration, several steps after the cause. SQLite needs write
+permission on the **directory** as well as the file, for its journal, so
+`chown -R lab:lab` is the fix rather than touching the database alone.
+
+What makes this one worth its own paragraph is that the script's own
+`engine --check` **passed** immediately beforehand — as root, which could write
+perfectly well. *A check that runs under a different identity than the program
+is a check that can lie.* The script now runs `--check` as `RUN_AS` (default
+`lab`), the account that will actually serve, so the check and the program share
+a failure mode.
+
 **Verifying the install is actually minimal**, before trusting anything built on
 top of it — `df -h /` and a package count:
 
