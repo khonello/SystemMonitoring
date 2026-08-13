@@ -201,7 +201,9 @@ including by accident:
    rather than the placed one afterwards.
 2. **An attach reported success and left the drive empty.** `Set-VMDvdDrive` can
    return a path with `DvdMediaType : None` behind it. The path is not the
-   media.
+   media. Worse, an attach can verify as `ISO` and *then* drop seconds later,
+   after whatever attached it has moved on — so checking once is not enough,
+   which is why `build_repo_iso.ps1` waits and re-checks before it exits.
 3. **The guest is holding a stale device.** Media that was swapped underneath a
    mounted filesystem can leave the kernel unable to open `/dev/sr0` even after
    a correct re-attach.

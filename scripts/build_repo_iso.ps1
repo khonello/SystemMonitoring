@@ -274,6 +274,36 @@ foreach ($vm in $vms) {
     Ok "$($vm.Name): DvdMediaType ISO"
 }
 
+# SETTLE CHECK. An attach can verify as ISO and then drop to None seconds later,
+# after this script would otherwise have exited -- observed three times on
+# 2026-08-13, apparently because Hyper-V notices asynchronously that the backing
+# file was replaced. The operator then finds an empty drive with nothing to
+# explain it, goes looking in the guest, and finds "Can't open blockdev" or a
+# missing D:. Checking once immediately after attaching is not enough; the point
+# is to still be here when it happens.
+if ($vms -and -not $DryRun) {
+    Doing 'settle check -- media can drop seconds after a successful attach'
+    Start-Sleep -Seconds 8
+
+    foreach ($vm in $vms) {
+        $drive = Get-VMDvdDrive -VMName $vm.Name | Select-Object -First 1
+        if ($drive.DvdMediaType -eq 'ISO') {
+            Ok "$($vm.Name): still attached after settling"
+            continue
+        }
+
+        Warn "$($vm.Name) dropped the media after attaching -- re-attaching"
+        Get-VMDvdDrive -VMName $vm.Name | Set-VMDvdDrive -Path $IsoPath
+        Start-Sleep -Seconds 5
+
+        $drive = Get-VMDvdDrive -VMName $vm.Name | Select-Object -First 1
+        if ($drive.DvdMediaType -ne 'ISO') {
+            throw "$($vm.Name) will not hold the media. Check it by hand: Get-VMDvdDrive -VMName $($vm.Name)"
+        }
+        Ok "$($vm.Name): re-attached and holding"
+    }
+}
+
 Write-Host @"
 
 Done.
