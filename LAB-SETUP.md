@@ -125,18 +125,28 @@ into the VM and checks its own work:
 .\scripts\build_repo_iso.ps1 -AttachTo LabEngine
 ```
 
-Omit `-AttachTo` to build only; pass `LabEngine,LabClient` for both. `-DryRun`
-prints the plan. It finds the lab drive itself, so no drive letter appears here.
+**This is the only time you name a VM.** The disc does not exist yet, so no
+machine is holding it and there is nothing for the script to find; `-AttachTo`
+is how it gets into the drive the first time. Every re-cut afterwards is a bare
+`.\scripts\build_repo_iso.ps1`, which sweeps whichever machines already have it
+— see *Updating a lab that is already running*.
+
+`-DryRun` prints the plan. It finds the lab drive itself, so no drive letter
+appears here.
 
 `oscdimg.exe`, which does the actual imaging, ships with the **Windows ADK**
 (*Deployment Tools* feature). It is the only external tool this procedure needs.
 
-The script exists because this is five commands with two silent failure modes,
-both of which cost an evening on 2026-08-13 — a running VM holds the image, so
-overwriting it fails outright, and `Set-VMDvdDrive` can leave the drive **empty**
-while reporting a path, handing the guest the *previous* disc. So it ejects
-before copying, verifies `DvdMediaType` rather than the path, and retries once.
-It refuses to build at all without `certs/`.
+The script exists because this is five commands with three silent failure modes,
+each of which cost an evening. A running VM holds the image, so overwriting it
+fails outright — and it holds it whether or not the guest has *mounted* it,
+which is why checking `mount` in the guest misleads. `Set-VMDvdDrive` can leave
+the drive **empty** while reporting a path, handing the guest the *previous*
+disc. And Hyper-V releases a handle asynchronously, so ejecting and copying in
+the same breath is a race. So the script sweeps every VM holding the image,
+ejects, waits for the file to genuinely come free, copies, restores every drive
+it emptied, and verifies `DvdMediaType` rather than the path. It refuses to
+build at all without `certs/`.
 
 **It verifies the image before attaching it, never after** — mounting the
 finished disc, to confirm the scripts are physically on it and that
@@ -179,6 +189,10 @@ What it does under the hood, and why:
 
 ### Updating a lab that is already running
 
+> **`LAB-UPDATE.md` is the one-page version of this section** — the commands
+> with none of the reasoning. Use it once you have done this a couple of times;
+> read on for why each step is the way it is.
+
 Steps 1–10 build the lab once. This is the loop you actually spend time in
 afterwards, when the code has changed and both guests need it — and it is worth
 separating, because **the disc was designed for bootstrapping, not for
@@ -187,14 +201,29 @@ this section comes from.
 
 **The realistic pathway, in order:**
 
-1. **Host** — cut and attach in one command:
+1. **Host, in an ELEVATED PowerShell** — cut and swap in one command, with no
+   arguments:
 
    ```powershell
-   .\scripts\build_repo_iso.ps1 -AttachTo LabEngine,LabClient
+   .\scripts\build_repo_iso.ps1
    ```
 
-   It ejects, copies, attaches, then waits and re-checks that the media is still
-   there. Wait for `still attached after settling` before touching the guests.
+   It finds every VM holding the image, ejects from all of them, waits for the
+   file to actually come free, copies, puts the disc back in every drive it took
+   it out of, then waits and re-checks that the media is still there. Wait for
+   `still attached after settling` before touching the guests.
+
+   **Do not name VMs unless you are adding the disc to one that does not have
+   it.** `-AttachTo` used to be required and no longer is. Naming a subset is
+   how this goes wrong: on 2026-08-15 a run naming `LabEngine` alone failed at
+   the copy because `LabClient` was still running with the same image attached
+   — and the eject that had already succeeded left `LabEngine` with an empty
+   drive. The sweep exists so that you never have to remember which machines
+   hold the disc.
+
+   Elevated matters: without it Hyper-V refuses to enumerate VMs, the sweep is
+   skipped with a warning, and the copy fails against whatever is holding the
+   file. Unelevated is fine only when both VMs are off.
 
 2. **Move promptly.** There is a window here. Replacing the backing file makes
    Hyper-V re-evaluate the attachment, and a drive that verified as `ISO` can
@@ -238,12 +267,24 @@ this section comes from.
 5. **`umount /mnt` on LabEngine when you are done**, before the next re-cut.
    Linux holds the medium while it is mounted, and the host cannot take it back.
 
-**A better loop, once the lab is networked.** LabEngine has `sshd` and a fixed
-address, so `scp -r` from the host updates it with no disc, no eject, no
-`umount` and nothing typed in the guest. The ISO exists for a machine with *no
-network, no account and no tooling* — true when you are building, false the
-moment the lab is up. If you find yourself re-cutting discs repeatedly in one
-session, that is the signal to switch.
+**A better loop, if you have ssh.** With a fixed address and `sshd`, `scp -r`
+from the host updates the Engine with no disc, no eject, no `umount` and nothing
+typed in the guest. The ISO exists for a machine with *no network, no account
+and no tooling* — true when you are building, false the moment the lab is up. If
+you find yourself re-cutting discs repeatedly in one session, that is the signal
+to switch.
+
+**Check before relying on it**, because *SSH server* is optional at tasksel (step
+7) and this build may not have it:
+
+```powershell
+ssh lab@192.168.100.2 "echo ok"
+```
+
+If that fails you do not have it, and installing `openssh-server` needs the
+internet the isolated switch does not provide — either turn on NAT
+(`LAB-NETWORK.md`) or put the VM back on the Default Switch for the install.
+Neither is worth doing mid-session; use the disc.
 
 ### When the disc disappears from a guest
 
@@ -312,10 +353,12 @@ first. On LabClient the disc simply reappears as `D:` after a reboot.
 - `umount /mnt` in the guest *before* re-cutting, always.
 - Never mount the lab ISO on the host while a guest has it attached.
 - Check `DvdMediaType` after every attach — the script does this for you.
-- **For iterating rather than bootstrapping, prefer the network.** LabEngine has
-  `sshd` and a fixed address, so `scp` from the host updates it without touching
-  the disc at all. The ISO exists for a machine with no network, no account and
-  no tooling; once the lab is up, that is no longer the situation you are in.
+- **For iterating rather than bootstrapping, prefer the network** — if this
+  build has `sshd`, which is optional at tasksel. Check with
+  `ssh lab@192.168.100.2 "echo ok"`; if it answers, `scp` from the host updates
+  the Engine without touching the disc at all. The ISO exists for a machine with
+  no network, no account and no tooling; once the lab is up, that is no longer
+  the situation you are in.
 
 ### Attaching, if you are doing it by hand
 
@@ -657,6 +700,13 @@ No gateway anywhere is deliberate: the guests reach the host and each other and
 nothing else, which keeps the stubbed authentication (`issues.md` C1) off every
 real network by construction rather than by a firewall rule.
 
+**One demonstration needs a gateway anyway.** Website filtering rewrites the
+guest's hosts file, so with no internet a blocked site and an unblocked one both
+fail to load and the demonstration proves nothing. `LAB-NETWORK.md` turns on
+host-side NAT for the same subnet — outbound only, no addresses change, one
+command to undo — and lists the two things that make a working block look broken
+(the browser's DNS-over-HTTPS, and the agent needing to be elevated).
+
 ---
 
 ## Pitfalls
@@ -696,7 +746,9 @@ Every one of these has bitten. Symptom first, since that's what you'll have.
 | A lab script is "not found" in the guest, but it is right there in your editor | `LabRepo.iso` predates the script. The disc is a snapshot, and nothing warns you | Re-cut the ISO (step 4) and verify it mounted on the host first. Bit us on 2026-08-12 |
 | A script runs in the guest but behaves like an older version | Same cause, worse symptom — the file exists on the stale disc, just out of date | As above. Check the disc's copy against the repo, not just its presence |
 | `mount /dev/sr0` says *no medium found* | No ISO in the VM's DVD drive, or it still holds the Debian netinst | `Get-VMDvdDrive -VMName LabEngine` on the host, then `Set-VMDvdDrive` to `LabRepo.iso` |
-| Re-cutting the ISO fails: *the file is being used by another process* | A running VM holds the image it has mounted | Eject first (`Set-VMDvdDrive -Path $null`), copy, re-attach. Do it before the guest mounts the disc, not after |
+| Re-cutting the ISO fails: *the file is being used by another process* — and the guest insists it has nothing mounted | **A running VM holds the host file whether or not the guest has mounted it.** A Windows guest never mounts anything and pins it just the same, so `mount` inside LabEngine tells you nothing. Checking the guest is checking the wrong layer | Run `build_repo_iso.ps1` **elevated and with no arguments**: it sweeps every VM holding the image. If it still fails it now names the VMs that hold it. Failing that, shut both VMs off — the handle goes with the worker process |
+| The copy failed, and now a guest's DVD drive is *empty* | An older `build_repo_iso.ps1` ejected before copying and did not put the disc back when the copy threw. It now restores every drive it emptied, but only within the same run — a drive emptied by an earlier failure stays empty | `Get-VMDvdDrive -VMName <vm> \| Set-VMDvdDrive -Path <lab-drive>:\LabRepo.iso`, or re-run the build with `-AttachTo <vm>` once |
+| Website blocking "does not work" in the lab | The switch has no gateway, so nothing loads whether blocked or not — and with DNS-over-HTTPS on, a browser skips the hosts file even when it does | `LAB-NETWORK.md`: host-side NAT, and turn off *Use secure DNS* in the guest's browser. The agent must also be running **elevated** to write the hosts file |
 | A guest that had the disc mounted suddenly cannot: `mount: fsconfig() failed: /dev/sr0: Can't open blockdev` | The medium was taken away underneath it. Mounting the ISO **on the host** — to inspect it, or to verify it — ejects it from every guest holding it | Re-attach and mount again; `reboot` the guest if its view of the drive stays stale. Verify an image *before* attaching it, never after: `build_repo_iso.ps1` checks the temporary copy for exactly this reason |
 | `Set-VMDvdDrive` reports an error, or appears to work but the drive is empty | Ejecting and re-attaching in quick succession can fail transiently — the drive object churns | **Always verify**: `Get-VMDvdDrive` must show `DvdMediaType : ISO`, not just a path. Re-issue with explicit `-ControllerNumber 0 -ControllerLocation 1` |
 | LabEngine boots back into the Debian installer | The netinst is still attached and the VM boots DVD-first | Swap the DVD path to `LabRepo.iso` (step 7) |
@@ -748,6 +800,9 @@ Re-running after fixing one thing is safe and is the intended way to use them.
 
 `scripts/build_client_image.ps1` is **not** part of this procedure — see
 `issues.md` D9.
+
+`LAB-NETWORK.md` is the companion to this page: the switch, and how to give it a
+gateway for the website-filtering demonstration without renumbering anything.
 
 ### Reading a guest's console without looking at it
 

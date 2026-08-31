@@ -94,25 +94,25 @@ Item {
 
             Rectangle { width: 1; height: 20; color: Theme.border }
 
-            // Indeterminate to the student: no countdown is shown on the
-            // client. The internal cap is an admin fail-safe, surfaced here
-            // as a warning rather than there as a deadline.
-            Button {
-                text: "Pause"
-                flat: true
-                Layout.preferredHeight: Theme.controlHeight
-                font.pixelSize: Theme.fontBody
-                enabled: root.ready
-                onClicked: backend.pauseSelected()
+            // Pause and Resume moved to the Restrictions page. Here they were
+            // two flat buttons that looked identical whether the machine was
+            // held or not, so the bar showed a control for a state without ever
+            // showing the state; on Restrictions they sit beside a pill that
+            // says which it is, and only the applicable one is enabled.
+            //
+            // What stays is a read-only indicator, because an operator running
+            // a script needs to know the screen is held without changing page.
+            StatePill {
+                visible: root.ready && backend.selectedPaused
+                text: "SCREEN HELD"
+                tint: Theme.warn
             }
 
-            Button {
-                text: "Resume"
-                flat: true
-                Layout.preferredHeight: Theme.controlHeight
-                font.pixelSize: Theme.fontBody
-                enabled: root.ready
-                onClicked: backend.resumeSelected()
+            StatePill {
+                visible: root.ready && backend.idleSeconds >= 900
+                text: "IDLE " + backend.idleText
+                tint: Theme.textDim
+                muted: true
             }
         }
 

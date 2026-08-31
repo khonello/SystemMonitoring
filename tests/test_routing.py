@@ -16,6 +16,8 @@ from common.constants import (
     MAX_TRACE_ID_LENGTH,
     MSG_ADMIN_COMMAND,
     MSG_APP_DATA,
+    MSG_CLIENT_STATE,
+    MSG_HEARTBEAT,
     MSG_REPORT_REQUEST,
     MSG_SET_APP_BLACKLIST,
     MSG_SET_SAMPLE_RATE,
@@ -479,3 +481,63 @@ async def test_renewal_only_touches_watched_clients():
 
     assert [m["payload"]["fast"] for m in watched.sent] == [True]
     assert unwatched.sent == []
+
+
+# ---------------------------------------------------------------------------
+# Client liveness — idle time reaching a console
+# ---------------------------------------------------------------------------
+#
+# Idle time and screen lock were collected by every agent and sent on every
+# heartbeat, and then stopped at an Engine log line: nothing stored them and
+# nothing relayed them, so the console could not answer "is anyone at this
+# machine?" These cover the last hop, and the two limits on it.
+
+
+@pytest.mark.asyncio
+async def test_a_heartbeat_carries_idle_time_to_the_watching_console():
+    watching = _connect_admin(admin_id="admin-watching", watching=CLIENT)
+
+    await process_message(
+        CLIENT,
+        ROLE_CLIENT,
+        create_message(
+            MSG_HEARTBEAT,
+            {"status": "active", "idle_time": 42.5, "screen_locked": False},
+        ),
+    )
+
+    relayed = [m for m in watching.sent if m["type"] == MSG_CLIENT_STATE]
+    assert len(relayed) == 1
+    assert relayed[0]["client_id"] == CLIENT
+    assert relayed[0]["payload"]["idle_time"] == 42.5
+    assert relayed[0]["payload"]["screen_locked"] is False
+
+
+@pytest.mark.asyncio
+async def test_liveness_reaches_only_the_console_watching_that_client():
+    """Scoped like telemetry: an unwatched lab pushes nothing at anybody."""
+    watching = _connect_admin(admin_id="admin-watching", watching=CLIENT)
+    elsewhere = _connect_admin(admin_id="admin-elsewhere", watching="pc-99")
+    unwatching = _connect_admin(admin_id="admin-idle", watching=None)
+
+    await process_message(
+        CLIENT, ROLE_CLIENT, create_message(MSG_HEARTBEAT, {"idle_time": 1.0})
+    )
+
+    assert [m["type"] for m in watching.sent] == [MSG_CLIENT_STATE]
+    assert elsewhere.sent == []
+    assert unwatching.sent == []
+
+
+@pytest.mark.asyncio
+async def test_an_admins_own_heartbeat_is_never_relayed_as_client_state():
+    """Admins heartbeat through the same route. An operator's idle time is not
+    telemetry, and relaying it would make one console report on another."""
+    listener = _connect_admin(admin_id="admin-listener", watching=ADMIN)
+    connection_manager.register(ADMIN, _capturing_writer(), ROLE_ADMIN)
+
+    await process_message(
+        ADMIN, ROLE_ADMIN, create_message(MSG_HEARTBEAT, {"idle_time": 900.0})
+    )
+
+    assert listener.sent == []

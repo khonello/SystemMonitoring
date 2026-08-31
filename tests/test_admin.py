@@ -13,7 +13,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 
-from admin.backend import Backend, _describe_check, _flatten_report, _format_bytes
+from admin.backend import (
+    Backend,
+    _describe_check,
+    _flatten_report,
+    _format_bytes,
+    _format_idle,
+)
 from admin.connection import EngineConnection
 from admin.models import ApplicationModel, ClientListModel
 from admin.validation import (
@@ -23,8 +29,10 @@ from admin.validation import (
     validate_script,
 )
 from common.constants import (
+    MSG_CLIENT_STATE,
     MSG_COMMAND_RESPONSE,
     MAX_BLOCK_HOURS,
+    PAUSE_MAX_SECONDS,
     MSG_SET_APP_BLACKLIST,
     MSG_SET_TIME_RESTRICTION,
     MSG_TERMINATE_PROCESS,
@@ -896,3 +904,136 @@ def test_a_corrupt_capture_is_reported_rather_than_crashing(tmp_path, monkeypatc
     # tmp_path, so an empty-directory assertion would be testing that fixture.
     assert list(tmp_path.glob("*.jpeg")) == []
     assert "not valid base64" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Live client state — what the console can say about a machine right now
+# ---------------------------------------------------------------------------
+
+
+def test_idle_time_is_unknown_until_a_heartbeat_lands():
+    """A dash, not a zero. "Nobody has told us" and "somebody is typing" are
+    opposite answers, and defaulting to 0 reports the wrong one."""
+    backend = Backend()
+
+    assert backend.idleSeconds == -1
+    assert backend.idleText == "--"
+    assert backend.screenLocked is False
+
+
+def test_client_state_is_kept_per_machine():
+    backend = Backend()
+    backend.clients.setRows([{"client_id": "pc-01"}, {"client_id": "pc-02"}])
+
+    for client_id, idle in (("pc-01", 12.0), ("pc-02", 4000.0)):
+        backend._handle_client_state(
+            create_message(MSG_CLIENT_STATE, {"idle_time": idle}, client_id=client_id)
+        )
+
+    backend.selectedClient = "pc-01"
+    assert backend.idleText == "12s"
+
+    # Switching back shows the last known value rather than dashes: the state
+    # is buffered per machine exactly as the live telemetry is.
+    backend.selectedClient = "pc-02"
+    assert backend.idleText == "1h06"
+
+
+def test_dropping_the_engine_clears_idle_rather_than_leaving_it_on_screen():
+    """A number left over from before the link died reads as current."""
+    backend = Backend()
+    backend.clients.setRows([{"client_id": "pc-01"}])
+    backend.selectedClient = "pc-01"
+    backend._handle_client_state(
+        create_message(MSG_CLIENT_STATE, {"idle_time": 30.0}, client_id="pc-01")
+    )
+    assert backend.idleSeconds == 30
+
+    backend._clear_live()
+
+    assert backend.idleSeconds == -1
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [(-1, "--"), (0, "0s"), (59.9, "59s"), (60, "1m"), (3599, "59m"),
+     (3600, "1h00"), (7845, "2h10")],
+)
+def test_idle_is_formatted_at_a_width_that_does_not_make_the_tile_twitch(
+    seconds, expected
+):
+    assert _format_idle(seconds) == expected
+
+
+def test_paused_is_read_off_the_roster_not_from_what_this_console_asked_for():
+    backend = Backend()
+    backend.clients.setRows([
+        {"client_id": "pc-01", "paused": True},
+        {"client_id": "pc-02", "paused": False},
+    ])
+
+    backend.selectedClient = "pc-01"
+    assert backend.selectedPaused is True
+
+    backend.selectedClient = "pc-02"
+    assert backend.selectedPaused is False
+
+
+@pytest.mark.asyncio
+async def test_applied_policy_is_recorded_per_machine_when_it_is_sent():
+    """The editors say "sent" or "edited, not sent", so something has to know
+    what was pushed. It is per machine: switching selection must not make one
+    machine's policy look like it was applied to another."""
+    backend = Backend()
+    backend.clients.setRows([{"client_id": "pc-01"}, {"client_id": "pc-02"}])
+
+    backend.selectedClient = "pc-01"
+    assert backend.appliedWebsites == ""
+
+    backend.setWebsitePolicy("blacklist", "facebook.com\nyoutube.com", "block")
+
+    assert backend.appliedWebsites == "facebook.com\nyoutube.com"
+    assert backend.appliedWebsiteMode == "blacklist"
+    assert backend.appliedWebsitesAt != ""
+
+    backend.selectedClient = "pc-02"
+    assert backend.appliedWebsites == ""
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_blacklist_is_recorded_as_sent_and_empty():
+    """Applying an empty list is a real instruction, and the editor has to be
+    able to tell "cleared" from "never touched"."""
+    backend = Backend()
+    backend.clients.setRows([{"client_id": "pc-01"}])
+    backend.selectedClient = "pc-01"
+
+    backend.setAppBlacklist("")
+    await asyncio.sleep(0)
+
+    assert backend.appliedApps == ""
+    assert backend.appliedAppsAt != ""
+
+
+def test_count_where_totals_a_boolean_column():
+    """Backs the roster's "n held" without a Property whose notify signal would
+    have to live on the base class."""
+    model = ClientListModel()
+    model.setRows([
+        {"client_id": "a", "paused": True},
+        {"client_id": "b", "paused": False},
+        {"client_id": "c", "paused": True},
+    ])
+
+    assert model.countWhere("paused") == 2
+
+
+def test_the_two_caps_are_distinct_and_both_reach_the_console():
+    """The pause cap guards against the admin vanishing; the block cap guards
+    against the overlay hanging. The console states both, in the machine's own
+    numbers, so collapsing them into one constant would be caught here."""
+    backend = Backend()
+
+    assert backend.pauseCapMinutes == PAUSE_MAX_SECONDS // 60
+    assert backend.maxBlockHours == MAX_BLOCK_HOURS
+    assert backend.pauseCapMinutes != backend.maxBlockHours * 60

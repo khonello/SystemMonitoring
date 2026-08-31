@@ -57,6 +57,22 @@ class _DictListModel(QAbstractListModel):
 
     count = Property(int, _count, notify=countChanged)
 
+    @Slot(str, result=int)
+    def countWhere(self, key: str) -> int:
+        """How many rows have a truthy value under `key`.
+
+        A Slot rather than a Property for the same reason `total` is one: a
+        Property needs a notify signal, and a subclass cannot borrow the base
+        class's — PySide6 builds a metaobject whose notify index points into
+        another type, and the QML engine walks off the end of it when it builds
+        the property cache. It does not raise; the process dies with an access
+        violation before any QML error is reported.
+
+        Bind it as `model.count >= 0 ? model.countWhere("paused") : 0` so the
+        binding re-evaluates on countChanged, exactly as `total` is used.
+        """
+        return sum(1 for row in self._rows if row.get(key))
+
     @Slot(str, result=float)
     def total(self, key: str) -> float:
         """Sum one numeric column across every row.

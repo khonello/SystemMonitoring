@@ -1,17 +1,26 @@
-// Access-control policy editor.
+// Standing policy for the selected machine: the rules the agent re-enforces on
+// every collection cycle.
 //
-// The asymmetry here is deliberate, not an oversight: website filtering offers
-// both blacklist and whitelist, applications are blacklist-only. Whitelisting
-// applications cannot reliably enumerate OS and helper processes, so unlisted
-// applications are allowed by design (README "Access Control").
+// WHAT MOVED OUT, AND WHY. This page used to carry standing policy *and* every
+// immediate and fleet-wide action -- terminate a process, schedule a block,
+// block the whole room -- in two columns ordered by blast radius. Ordering them
+// was an improvement on stacking them, but it did not fix the underlying
+// problem: two different kinds of thing were sharing one page, so the two lists
+// that are the actual policy were squeezed into a half-width column with room
+// for about four visible lines each.
 //
-// LAYOUT. Four stacked GroupBoxes gave every control the same weight, so
-// "terminate one process" looked exactly as consequential as "block every
-// machine in the room". It is now two columns of sections, ordered by blast
-// radius: standing policy for one machine on the left, immediate and
-// fleet-wide actions on the right, with the destructive ones carrying a red
-// edge and their own confirmation. An operator should be able to tell what a
-// control will do to how many people before reading its label.
+// The split is along a line the protocol already draws. These two commands are
+// in DURABLE_COMMANDS: they declare state the machine should converge to, so
+// the Engine queues them for a machine that is offline and replays them on its
+// next registration. Everything on the Restrictions page is a point-in-time
+// action that is recorded as undeliverable instead. "Will be applied whenever
+// this machine next appears" and "happens now or not at all" are different
+// promises, and they should not be made by adjacent buttons.
+//
+// The asymmetry between the two lists is deliberate, not an oversight: website
+// filtering offers blacklist and whitelist, applications are blacklist-only,
+// because whitelisting applications cannot reliably enumerate the OS and helper
+// processes a machine needs (README "Access Control").
 
 import QtQuick
 import QtQuick.Controls
@@ -23,13 +32,53 @@ Item {
     id: root
 
     readonly property bool ready: backend.connected && backend.selectedClient !== ""
+    readonly property bool whitelist: policyMode.currentIndex === 1
+
+    // Mirrors `_normalise` in client/policy.py: the agent strips the scheme,
+    // the path and the port before writing a hosts entry, so a pasted URL is
+    // fine and must not be reported as an error. What is checked is what the
+    // line reduces to.
+    function normaliseDomain(line) {
+        var host = line.trim().toLowerCase().replace(/^https?:\/\//, "")
+        return host.split("/")[0].split("?")[0].split(":")[0].trim()
+    }
+
+    // No wildcards. A hosts file has no `*.example.com`; the agent would write
+    // the asterisk literally and the entry would match nothing, which is the
+    // silent failure this check exists to prevent. (The agent does add the
+    // `www.` form of every domain by itself.)
+    function isDomain(line) {
+        return /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(
+            root.normaliseDomain(line))
+    }
+
+    // A Windows image name. Anything with a path separator is a mistake: the
+    // client compares process names, not paths.
+    function isProcess(line) {
+        return /^[^\\/:*?"<>|]+$/.test(line) && line.length <= 260
+    }
+
+    // Load each machine's last-sent policy into the editors when the selection
+    // changes. Without this the boxes keep whatever was typed for the previous
+    // machine while the state pills describe the new one -- an empty editor
+    // reading "edited, not sent" against a policy that was in fact sent. The
+    // editors are per-machine views, so they have to follow the selection.
+    Connections {
+        target: backend
+
+        function onSelectedClientChanged() {
+            urlList.text = backend.appliedWebsites
+            appList.text = backend.appliedApps
+            policyMode.currentIndex = backend.appliedWebsiteMode === "whitelist" ? 1 : 0
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.space3
         spacing: Theme.space3
 
-        // --- context -------------------------------------------------------
+        // --- context ---------------------------------------------------------
 
         RowLayout {
             Layout.fillWidth: true
@@ -37,153 +86,207 @@ Item {
 
             ColumnLayout {
                 spacing: 1
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
 
                 Label {
-                    text: root.ready ? "Policy for " + backend.selectedClient
-                                     : "No client selected"
+                    text: root.ready ? "Standing policy for " + backend.selectedClient
+                                     : "No machine selected"
                     color: Theme.text
                     font.pixelSize: Theme.fontLarge
                     font.bold: true
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
                 }
 
                 Label {
                     text: root.ready
-                        ? "Standing policy is re-enforced every collection cycle"
-                        : "Select a machine on the left to edit its policy"
+                        ? "Re-enforced every collection cycle. Queued and replayed if this " +
+                          "machine is offline when you apply it."
+                        : "Choose a machine on the left to edit its policy"
                     color: Theme.textFaint
                     font.pixelSize: Theme.fontSmall
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
                 }
             }
 
-            Item { Layout.fillWidth: true }
-
-            // A standing reminder of what "all clients" means right now. The
-            // number is the difference between an abstract warning and an
-            // informed decision.
-            Rectangle {
-                visible: backend.connected
-                implicitWidth: fleetLabel.implicitWidth + Theme.space3 * 2
-                implicitHeight: 26
-                radius: Theme.radius
-                color: Theme.surfaceHigh
-                border.width: 1
-                border.color: Theme.border
-
-                Label {
-                    id: fleetLabel
-                    anchors.centerIn: parent
-                    text: clientModel.count + " machine" + (clientModel.count === 1 ? "" : "s") + " known"
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
-                }
+            StatePill {
+                visible: root.ready
+                text: backend.selectedPaused ? "PAUSED" : "RUNNING"
+                tint: backend.selectedPaused ? Theme.warn : Theme.ok
+                muted: !backend.selectedPaused
             }
         }
 
-        // --- the two columns -----------------------------------------------
+        // --- the two standing rules -------------------------------------------
 
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Theme.space3
 
-            // Left: standing policy, scoped to the selected machine.
-            ColumnLayout {
+            Section {
+                title: "Website filtering"
+                accent: root.whitelist ? Theme.warn : "transparent"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 1
-                spacing: Theme.space3
 
-                Section {
-                    title: "Website filtering"
+                RowLayout {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    spacing: Theme.space2
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.space2
-
-                        SegmentedControl {
-                            id: policyMode
-                            segments: [{ text: "Blacklist" }, { text: "Whitelist" }]
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        ComboBox {
-                            id: policyAction
-                            model: ["block", "unblock", "replace"]
-                            Layout.preferredWidth: 116
-                            Layout.preferredHeight: Theme.controlHeight
-                            font.pixelSize: Theme.fontBody
-                        }
+                    // Whitelist declares its own colour, so switching into the
+                    // restrictive mode is visible before you read the label.
+                    SegmentedControl {
+                        id: policyMode
+                        segments: [
+                            { text: "Blacklist" },
+                            { text: "Whitelist", tint: Theme.warn }
+                        ]
                     }
+
+                    Item { Layout.fillWidth: true }
 
                     Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
+                        text: "on apply"
+                        color: Theme.textFaint
                         font.pixelSize: Theme.fontSmall
-                        color: policyMode.currentIndex === 1 ? Theme.warn : Theme.textFaint
-                        text: policyMode.currentIndex === 1
-                            ? "Only these domains will load. Expect pages to break unless their " +
-                              "CDN, font and SSO domains are listed too - accepted for locked-down " +
-                              "sessions such as exams."
-                            : "These domains are blocked; everything else loads. The right default " +
-                              "for general lab use."
                     }
 
-                    ScrollView {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-
-                        TextArea {
-                            id: urlList
-                            enabled: root.ready
-                            wrapMode: TextEdit.NoWrap
-                            font.family: Theme.mono
-                            font.pixelSize: Theme.fontBody
-                            placeholderText: "One domain per line\nfacebook.com\nyoutube.com"
-                        }
-                    }
-
-                    Button {
-                        text: "Apply website policy"
-                        highlighted: true
-                        Layout.alignment: Qt.AlignRight
+                    ComboBox {
+                        id: policyAction
+                        model: ["block", "unblock", "replace"]
+                        Layout.preferredWidth: 112
                         Layout.preferredHeight: Theme.controlHeight
                         font.pixelSize: Theme.fontBody
-                        enabled: root.ready && urlList.text.trim().length > 0
-                        onClicked: backend.setWebsitePolicy(
-                            policyMode.currentIndex === 1 ? "whitelist" : "blacklist",
-                            urlList.text, policyAction.currentText)
                     }
                 }
 
-                Section {
-                    title: "Application blacklist"
-                    hint: "Blacklist only, by design: whitelisting cannot enumerate OS and " +
-                          "helper processes. Re-enforced every cycle, so blocking a launch " +
-                          "means terminating shortly after it starts. An empty list clears it."
+                // The consequence of the mode, stated in the mode's own colour
+                // so the warning and the control agree with each other.
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: modeNote.implicitHeight + Theme.space2 * 2
+                    radius: Theme.radius
+                    color: root.whitelist ? Qt.rgba(0.82, 0.6, 0.13, 0.10) : "transparent"
+                    border.width: root.whitelist ? 1 : 0
+                    border.color: Qt.rgba(0.82, 0.6, 0.13, 0.45)
+
+                    Label {
+                        id: modeNote
+                        anchors.fill: parent
+                        anchors.margins: Theme.space2
+                        wrapMode: Text.Wrap
+                        font.pixelSize: Theme.fontSmall
+                        color: root.whitelist ? Theme.warn : Theme.textFaint
+                        text: root.whitelist
+                            ? "Whitelist: only these domains will load and everything else is " +
+                              "refused. Expect pages to break unless their CDN, font and SSO " +
+                              "domains are listed too - accepted for locked-down sessions such " +
+                              "as exams."
+                            : "Blacklist: these domains are blocked and everything else loads. " +
+                              "The right default for general lab use."
+                    }
+                }
+
+                ListEditor {
+                    id: urlList
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    enabled: root.ready
+                    unit: "domain"
+                    unitPlural: "domains"
+                    validate: root.isDomain
+                    invalidNote: "Not hostnames, so the client has nothing to match. " +
+                                 "No wildcards - a hosts file cannot express them"
+                    sentText: backend.appliedWebsites
+                    sentAt: backend.appliedWebsitesAt
+                    placeholder: "One domain per line. A pasted URL is reduced to its\n" +
+                                 "host, and the www. form is blocked automatically.\n\n" +
+                                 "facebook.com\nyoutube.com\ntiktok.com"
+                }
 
-                    ScrollView {
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.space2
+
+                    Label {
+                        visible: urlList.everSent && urlList.sentAt !== ""
+                        text: "Last sent as " + backend.appliedWebsiteMode + " at " +
+                              backend.appliedWebsitesAt
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fontSmall
+                        elide: Text.ElideRight
                         Layout.fillWidth: true
-                        Layout.fillHeight: true
+                    }
 
-                        TextArea {
-                            id: appList
-                            enabled: root.ready
-                            wrapMode: TextEdit.NoWrap
-                            font.family: Theme.mono
-                            font.pixelSize: Theme.fontBody
-                            placeholderText: "One process per line\nsteam.exe\ndiscord.exe"
-                        }
+                    Item { Layout.fillWidth: !urlList.everSent }
+
+                    Button {
+                        text: urlList.modified || !urlList.everSent
+                            ? "Apply website policy" : "Re-apply"
+                        highlighted: urlList.modified
+                        flat: !urlList.modified
+                        Layout.preferredHeight: Theme.controlHeight
+                        font.pixelSize: Theme.fontBody
+                        Material.accent: root.whitelist ? Theme.warn : Theme.accent
+                        enabled: root.ready && urlList.count > 0
+                        onClicked: backend.setWebsitePolicy(
+                            root.whitelist ? "whitelist" : "blacklist",
+                            urlList.text, policyAction.currentText)
+                    }
+                }
+            }
+
+            Section {
+                title: "Application blacklist"
+                hint: "Blacklist only, by design: whitelisting cannot enumerate the OS and " +
+                      "helper processes a machine needs. Re-enforced every cycle, so blocking " +
+                      "a launch means terminating it shortly after it starts."
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredWidth: 1
+
+                ListEditor {
+                    id: appList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    enabled: root.ready
+                    unit: "process"
+                    unitPlural: "processes"
+                    validate: root.isProcess
+                    invalidNote: "Not process names - the client compares image names, " +
+                                 "not paths"
+                    sentText: backend.appliedApps
+                    sentAt: backend.appliedAppsAt
+                    placeholder: "One process per line\nsteam.exe\ndiscord.exe"
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.space2
+
+                    // An empty list is a real instruction, and one worth
+                    // spelling out rather than leaving the operator to infer
+                    // from a button that stayed enabled.
+                    Label {
+                        text: appList.count === 0
+                            ? "Applying an empty list clears the blacklist."
+                            : (appList.everSent ? "Last sent at " + backend.appliedAppsAt : "")
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fontSmall
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
 
                     Button {
-                        text: "Apply blacklist"
-                        highlighted: true
-                        Layout.alignment: Qt.AlignRight
+                        text: appList.count === 0 ? "Clear blacklist"
+                            : (appList.modified || !appList.everSent
+                                ? "Apply blacklist" : "Re-apply")
+                        highlighted: appList.modified
+                        flat: !appList.modified
                         Layout.preferredHeight: Theme.controlHeight
                         font.pixelSize: Theme.fontBody
                         enabled: root.ready
@@ -191,221 +294,6 @@ Item {
                     }
                 }
             }
-
-            // Right: things that happen now, and things that reach everyone.
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.preferredWidth: 1
-                spacing: Theme.space3
-
-                Section {
-                    title: "Terminate a process now"
-                    hint: "One-off, on the selected machine. Unrelated to the standing blacklist."
-                    Layout.fillWidth: true
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.space2
-
-                        TextField {
-                            id: blockedApp
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Theme.controlHeight
-                            enabled: root.ready
-                            font.family: Theme.mono
-                            font.pixelSize: Theme.fontBody
-                            placeholderText: "steam.exe"
-                        }
-
-                        Button {
-                            text: "Terminate"
-                            Layout.preferredHeight: Theme.controlHeight
-                            font.pixelSize: Theme.fontBody
-                            Material.accent: Theme.danger
-                            highlighted: true
-                            enabled: root.ready && blockedApp.text.trim().length > 0
-                            onClicked: backend.terminateProcess(blockedApp.text.trim(), false)
-                        }
-                    }
-                }
-
-                Section {
-                    title: "Scheduled block"
-                    accent: Theme.warn
-                    hint: "The student sees a countdown to the end of the window. A pause, by " +
-                          "contrast, shows none. Enforcement is local, so it survives losing " +
-                          "the network and a reboot."
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-
-                    GridLayout {
-                        columns: 3
-                        columnSpacing: Theme.space2
-                        rowSpacing: Theme.space2
-                        Layout.fillWidth: true
-
-                        Label {
-                            text: "Block for"
-                            color: Theme.textDim
-                            font.pixelSize: Theme.fontBody
-                        }
-
-                        SpinBox {
-                            id: blockDuration
-                            from: 1; to: 24 * 60; stepSize: 15; value: 60
-                            editable: true
-                            enabled: backend.connected
-                            Layout.preferredWidth: 150
-                            Layout.preferredHeight: Theme.controlHeight
-                        }
-
-                        Label {
-                            text: "minutes"
-                            color: Theme.textFaint
-                            font.pixelSize: Theme.fontBody
-                            Layout.fillWidth: true
-                        }
-
-                        Label {
-                            text: "Starting in"
-                            color: Theme.textDim
-                            font.pixelSize: Theme.fontBody
-                        }
-
-                        SpinBox {
-                            id: blockDelay
-                            from: 0; to: 24 * 60; stepSize: 5; value: 0
-                            editable: true
-                            enabled: backend.connected
-                            Layout.preferredWidth: 150
-                            Layout.preferredHeight: Theme.controlHeight
-                        }
-
-                        Label {
-                            text: blockDelay.value === 0 ? "minutes (immediately)" : "minutes"
-                            color: Theme.textFaint
-                            font.pixelSize: Theme.fontBody
-                            Layout.fillWidth: true
-                        }
-                    }
-
-                    // Only appears when it applies. A warning that is always on
-                    // screen is furniture; one that appears when you cross a
-                    // line is information.
-                    Rectangle {
-                        visible: blockDuration.value > backend.maxBlockHours * 60
-                        Layout.fillWidth: true
-                        implicitHeight: capLabel.implicitHeight + Theme.space2 * 2
-                        radius: Theme.radius
-                        color: Qt.rgba(0.82, 0.6, 0.13, 0.12)
-                        border.width: 1
-                        border.color: Theme.warn
-
-                        Label {
-                            id: capLabel
-                            anchors.fill: parent
-                            anchors.margins: Theme.space2
-                            wrapMode: Text.Wrap
-                            color: Theme.warn
-                            font.pixelSize: Theme.fontSmall
-                            text: "The client caps a single block at " + backend.maxBlockHours +
-                                  "h and will shorten this. The cap is a safety timeout against " +
-                                  "the overlay hanging, not a policy - re-apply for longer."
-                        }
-                    }
-
-                    Item { Layout.fillHeight: true }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.space2
-
-                        Button {
-                            text: "Block this machine"
-                            highlighted: true
-                            Layout.preferredHeight: Theme.controlHeight
-                            font.pixelSize: Theme.fontBody
-                            enabled: root.ready
-                            onClicked: backend.setTimeRestriction(
-                                blockDuration.value, blockDelay.value, false)
-                        }
-
-                        Button {
-                            text: "Clear"
-                            flat: true
-                            Layout.preferredHeight: Theme.controlHeight
-                            font.pixelSize: Theme.fontBody
-                            enabled: root.ready
-                            onClicked: backend.clearTimeRestriction(false)
-                        }
-
-                        Item { Layout.fillWidth: true }
-                    }
-                }
-
-                // Everything that reaches every machine lives in one place,
-                // marked, at the bottom. Blocking one machine is recoverable by
-                // walking to it; blocking the room is not.
-                Section {
-                    title: "Every connected machine"
-                    accent: Theme.danger
-                    hint: "These reach the whole lab at once."
-                    Layout.fillWidth: true
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.space2
-
-                        Button {
-                            text: "Block all"
-                            Layout.preferredHeight: Theme.controlHeight
-                            font.pixelSize: Theme.fontBody
-                            Material.accent: Theme.danger
-                            highlighted: true
-                            enabled: backend.connected
-                            onClicked: confirmBlockAll.open()
-                        }
-
-                        Button {
-                            text: "Clear all blocks"
-                            flat: true
-                            Layout.preferredHeight: Theme.controlHeight
-                            font.pixelSize: Theme.fontBody
-                            enabled: backend.connected
-                            onClicked: backend.clearTimeRestriction(true)
-                        }
-
-                        Item { Layout.fillWidth: true }
-                    }
-                }
-            }
         }
-    }
-
-    // Blocking one machine is recoverable by walking to it. Blocking the room
-    // is not, so that one asks first.
-    Dialog {
-        id: confirmBlockAll
-        anchors.centerIn: Overlay.overlay
-        modal: true
-        title: "Block every connected machine?"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-
-        Label {
-            width: 380
-            wrapMode: Text.Wrap
-            color: Theme.text
-            font.pixelSize: Theme.fontBody
-            text: "All " + clientModel.count + " known machines will be locked for " +
-                  blockDuration.value + " minutes" +
-                  (blockDelay.value > 0
-                      ? ", starting in " + blockDelay.value + " minutes." : ".") +
-                  "\n\nEnforcement is local: clearing it needs the clients to be " +
-                  "reachable again, though each block lapses on its own regardless."
-        }
-
-        onAccepted: backend.setTimeRestriction(
-            blockDuration.value, blockDelay.value, true)
     }
 }

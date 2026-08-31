@@ -1743,3 +1743,39 @@ one the agent actually ships to.
 **What would change this**: needing several client VMs on a genuinely small
 disk. The fix then is OOBE completion inside the script — start at the Appx
 keep-list, not the service list — not a registry workaround downstream.
+
+### D10. Idle time is live only; it is not stored and there is no idle report
+
+Every agent measures seconds since the last keyboard or mouse input
+(`client/monitors/usb_monitor.py` `get_idle_time`) and sends it, with the
+screen-lock flag, on every heartbeat. Until **2026-08-15** it went no further
+than one Engine log line: `_persist_heartbeat` wrote only `last_seen` and
+`status`, the `MSG_HEARTBEAT` route had no `relay_to`, and the word "idle"
+appeared nowhere in `admin/` except an unrelated comment. The console could not
+answer "is anyone actually at this machine?" although the answer arrived every
+fifteen seconds.
+
+**What was added.** `handle_heartbeat` now relays `MSG_CLIENT_STATE` carrying
+`idle_time`, `screen_locked` and `status`, and the console shows it as a stat
+tile beside processes, CPU, memory and USB events. Two limits, both deliberate:
+only for peers whose role is client — admins heartbeat through the same route
+and an operator's own idle time is not telemetry — and only to the consoles
+watching that client, which is the same scoping D5 gave the telemetry routes.
+
+**What was not added: storage.** No column, no table, no report. The reasons
+are that a sample every fifteen seconds per machine is the highest-frequency
+thing this system could write and by far the least dense in information; that
+the question it answers ("is this seat in use *now*?") is a live question, where
+the historical version is already served by application usage; and that the one
+genuinely useful aggregate — unattended hours per machine per week — needs
+sessionising, not raw samples, so storing the samples would not be the right
+first step anyway.
+
+**What would change this**: a stated requirement for utilisation reporting —
+"which machines are booked but empty" is the realistic one. Build it as a
+sessioniser on the client, sending an interval when a machine crosses into or
+out of idle, rather than by persisting every heartbeat at the Engine.
+
+**Also removed**: `IDLE_CHECK_INTERVAL` in `common/constants.py`, which was
+defined and never read. Idle time rides on the heartbeat and has no interval of
+its own; the constant only implied a collection loop that does not exist.

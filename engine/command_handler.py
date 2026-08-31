@@ -30,6 +30,7 @@ from common.constants import (
     MSG_ADMIN_COMMAND,
     MSG_APP_DATA,
     MSG_CLIENT_LIST,
+    MSG_CLIENT_STATE,
     MSG_COMMAND_ACCEPTED,
     MSG_COMMAND_COMPLETE,
     MSG_COMMAND_OUTPUT,
@@ -48,6 +49,7 @@ from common.constants import (
     REPORT_NETWORK_WEEKLY,
     REPORT_USB_EVENTS,
     ROLE_ADMIN,
+    ROLE_CLIENT,
     STATUS_ERROR,
     STATUS_SUCCESS,
     VALID_REPORTS,
@@ -121,12 +123,12 @@ def _persist_command_complete(peer_id: str, payload: dict[str, Any]) -> None:
 
 
 async def handle_heartbeat(context: Context, payload: dict[str, Any]) -> None:
-    """Track presence, and tell admins when a client's pause state flips.
+    """Track presence, tell admins when a pause flips, and forward liveness.
 
     Pause state is kept in the live registry rather than the database: it is
     ephemeral, self-expiring, and only ever interesting for clients that are
-    currently connected. The relay is conditional, which is why this is a
-    handler rather than a `relay_to` on the route.
+    currently connected. Both relays here are conditional, which is why this is
+    a handler rather than a `relay_to` on the route.
     """
     peer_id = context.peer_id
     connection_manager.set_status(peer_id, payload.get("status", "active"))
@@ -147,6 +149,33 @@ async def handle_heartbeat(context: Context, payload: dict[str, Any]) -> None:
             {"paused": now_paused, "pause_until": payload.get("pause_until")},
             ROLE_ADMIN,
             context.trace_id,
+        )
+
+    # Idle time and screen lock ride on the heartbeat because they are two small
+    # values in a message already being sent every 15 seconds. Until this relay
+    # they went no further: the console had no way to tell a machine somebody is
+    # working at from one merely left logged in.
+    #
+    # Only for clients — admins heartbeat through this same route, and an
+    # operator's own idle time is neither telemetry nor anyone's business. Only
+    # to watchers, and only when there is one, so an unwatched lab does not push
+    # a message per client per heartbeat at every console (issues.md D5).
+    if context.role != ROLE_CLIENT:
+        return
+
+    watchers = watch.watchers_of(peer_id)
+    if watchers:
+        await routing.relay(
+            MSG_CLIENT_STATE,
+            peer_id,
+            {
+                "idle_time": payload.get("idle_time"),
+                "screen_locked": bool(payload.get("screen_locked")),
+                "status": payload.get("status", "active"),
+            },
+            ROLE_ADMIN,
+            context.trace_id,
+            targets=watchers,
         )
 
 

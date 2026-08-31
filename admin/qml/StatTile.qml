@@ -20,7 +20,10 @@ Rectangle {
     property string unit: ""
     property color tint: Theme.accent
 
-    implicitWidth: 128
+    // Narrowed from 128 when the strip went to five tiles: five at the old
+    // width crowd the client name off the row at the 1024px minimum the console
+    // has to hold for projectors.
+    implicitWidth: 116
     implicitHeight: 56
     radius: Theme.radius
     color: Theme.surface

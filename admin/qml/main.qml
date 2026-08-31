@@ -103,9 +103,15 @@ ApplicationWindow {
                 Layout.preferredWidth: contentWidth
                 background: null
 
+                // Policy and Restrictions are two tabs rather than one page
+                // because the protocol treats them differently: Policy holds
+                // the DURABLE_COMMANDS, which queue for an offline machine and
+                // replay on its next registration, while a restriction happens
+                // to a connected machine now or is recorded as undeliverable.
                 TabButton { text: "Monitoring"; width: implicitWidth + 20 }
                 TabButton { text: "Reports"; width: implicitWidth + 20 }
                 TabButton { text: "Policy"; width: implicitWidth + 20 }
+                TabButton { text: "Restrictions"; width: implicitWidth + 20 }
             }
 
             Item { Layout.fillWidth: true }
@@ -280,6 +286,7 @@ ApplicationWindow {
                 MonitoringPanel {}
                 ReportsPanel {}
                 PolicyPanel {}
+                RestrictionsPanel {}
             }
 
             // Proportional AND capped. The proportion was added when the window

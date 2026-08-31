@@ -37,7 +37,11 @@ STREAM_OVERHEAD_ALLOWANCE: Final[int] = 64 * 1024
 HEARTBEAT_INTERVAL: Final[int] = 15
 APP_DATA_INTERVAL: Final[int] = 30
 NETWORK_DATA_INTERVAL: Final[int] = 60
-IDLE_CHECK_INTERVAL: Final[int] = 30
+
+# There is no IDLE_CHECK_INTERVAL. Idle time has no collection loop of its own:
+# it is two values read at the point the heartbeat is built, because they are
+# cheap and the message is already going (issues.md D10). The constant existed
+# and was never read by anything, which implied a loop that does not exist.
 
 # The rate a client samples at while an admin is watching it. These are for
 # the SCREEN only -- the recorded series keeps the intervals above, always, for
@@ -183,6 +187,20 @@ MSG_WATCH: Final[str] = "WATCH"
 # than polled, so a pause set from another console — or one that lapsed on its
 # own — appears without waiting for a roster refresh.
 MSG_PAUSE_STATE: Final[str] = "PAUSE_STATE"
+
+# Engine to Admin: the liveness detail carried on a client's heartbeat, for the
+# consoles watching that client.
+#
+# Idle time and screen-lock state were collected by every agent and sent on
+# every heartbeat, and then went no further than an Engine log line — nothing
+# stored them and nothing relayed them, so the console could not answer "is
+# anyone actually at this machine?" despite the answer arriving every 15
+# seconds. This carries it the last hop.
+#
+# Scoped to watchers, like telemetry: an operator wants it for the machine on
+# screen, and pushing every client's to every console is the fan-out D5 exists
+# to avoid. Live only, and deliberately not stored — see `issues.md` D10.
+MSG_CLIENT_STATE: Final[str] = "CLIENT_STATE"
 
 # Report kinds an admin may request. Each maps to one engine.database query.
 REPORT_NETWORK_24H: Final[str] = "network_24h"

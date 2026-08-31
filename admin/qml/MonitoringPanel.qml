@@ -15,6 +15,7 @@ Item {
     id: root
 
     readonly property bool hasClient: backend.selectedClient !== ""
+    readonly property bool screenLocked: root.hasClient && backend.screenLocked
 
     // Derived from the live application rows rather than sent separately: the
     // client already reports per-process CPU and memory, and summing here keeps
@@ -40,12 +41,16 @@ Item {
 
             ColumnLayout {
                 spacing: 1
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
 
                 Label {
                     text: root.hasClient ? backend.selectedClient : "No client selected"
                     color: Theme.text
                     font.pixelSize: Theme.fontLarge
                     font.bold: true
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
                 }
 
                 Label {
@@ -54,10 +59,10 @@ Item {
                         : "Choose a machine on the left"
                     color: Theme.textFaint
                     font.pixelSize: Theme.fontSmall
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
                 }
             }
-
-            Item { Layout.fillWidth: true }
 
             StatTile {
                 label: "Processes"
@@ -77,6 +82,25 @@ Item {
                 value: root.hasClient ? (root.totalMemory / 1024).toFixed(1) : "--"
                 unit: "GB"
                 tint: Theme.accent
+            }
+
+            // Idle time is the one number here that is not derived from the
+            // application rows: it rides on the heartbeat, so it keeps ticking
+            // for a machine sitting at a locked screen with nothing running.
+            //
+            // It answers a question the process table cannot -- "is anybody
+            // actually at this machine?" -- which is the difference between a
+            // busy lab and a lab full of logged-in empty seats. Green while
+            // somebody is working, amber once a quarter of an hour has passed
+            // with no keyboard or mouse at all.
+            StatTile {
+                label: root.screenLocked ? "Idle - locked" : "Idle"
+                value: root.hasClient ? backend.idleText : "--"
+                tint: !root.hasClient || backend.idleSeconds < 0 ? Theme.textFaint
+                    : root.screenLocked ? Theme.warn
+                    : backend.idleSeconds >= 900 ? Theme.warn
+                    : backend.idleSeconds < 60 ? Theme.ok
+                    : Theme.accent
             }
 
             StatTile {

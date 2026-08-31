@@ -201,11 +201,19 @@ Rectangle {
                 : "Not connected to an Engine."
         }
 
-        // --- fleet actions ---------------------------------------------------
+        // --- how many, and how many are held ---------------------------------
+        //
+        // Pause all and Resume all used to sit here. They have moved to the
+        // Restrictions page's "every connected machine" section, which is the
+        // one marked place fleet-wide actions belong: two unmarked flat buttons
+        // in the corner of a list reached the entire lab with less ceremony
+        // than terminating a single process, and this list is a way of choosing
+        // what to look at, which is not the same thing as a way of acting on
+        // it. What is left is the count, which is the fact the roster owns.
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 44
+            implicitHeight: 32
             color: Theme.canvas
 
             Rectangle {
@@ -216,27 +224,28 @@ Rectangle {
 
             RowLayout {
                 anchors.fill: parent
-                anchors.margins: Theme.space2
+                anchors.leftMargin: Theme.space3
+                anchors.rightMargin: Theme.space3
                 spacing: Theme.space2
 
-                Button {
-                    text: "Pause all"
-                    flat: true
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Theme.controlHeight
+                Label {
+                    text: clientModel.count + " known"
+                    color: Theme.textFaint
                     font.pixelSize: Theme.fontSmall
-                    enabled: backend.connected
-                    onClicked: backend.pauseAll()
+                    Layout.fillWidth: true
                 }
 
-                Button {
-                    text: "Resume all"
-                    flat: true
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Theme.controlHeight
+                // Mentions `count` so the binding re-runs when the roster
+                // changes: countWhere is a plain slot with no change signal.
+                Label {
+                    readonly property int held:
+                        clientModel.count >= 0 ? clientModel.countWhere("paused") : 0
+
+                    visible: held > 0
+                    text: held + " held"
+                    color: Theme.warn
                     font.pixelSize: Theme.fontSmall
-                    enabled: backend.connected
-                    onClicked: backend.resumeAll()
+                    font.bold: true
                 }
             }
         }

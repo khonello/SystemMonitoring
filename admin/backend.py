@@ -38,6 +38,7 @@ from common.constants import (
     MAX_SCRIPT_TIMEOUT,
     MSG_APP_DATA,
     MSG_CLIENT_LIST,
+    MSG_CLIENT_STATE,
     MSG_COMMAND_ACCEPTED,
     MSG_COMMAND_COMPLETE,
     MSG_COMMAND_OUTPUT,
@@ -81,6 +82,8 @@ class Backend(QObject):
     pauseExpiring = Signal(str, int)          # client_id, seconds remaining
     scriptChecked = Signal(str, bool)         # human-readable summary, passed
     captureReady = Signal(str, str)           # saved file path, client_id
+    clientStateChanged = Signal()             # idle time / lock state / pause
+    appliedPolicyChanged = Signal()           # what this console last pushed
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -113,6 +116,19 @@ class Backend(QObject):
         self._pause_until: dict[str, datetime] = {}
         self._warned: set[str] = set()
 
+        # client_id -> the liveness detail off its last heartbeat. Live only:
+        # it is never stored here or at the Engine, so a console that has just
+        # started knows nothing about a machine until the next heartbeat lands,
+        # which is at most 15 seconds and is the honest answer anyway.
+        self._client_state: dict[str, dict[str, Any]] = {}
+
+        # client_id -> what this console last pushed to it, so the editors can
+        # say whether what is on screen has been sent. Deliberately "sent from
+        # this console", not "in force on the machine": nothing in the protocol
+        # reports a client's current policy back, and a readout that implied
+        # otherwise would be worse than none.
+        self._applied: dict[str, dict[str, str]] = {}
+
         self._pause_timer = QTimer(self)
         self._pause_timer.setInterval(10_000)
         self._pause_timer.timeout.connect(self._check_pause_expiry)
@@ -120,6 +136,7 @@ class Backend(QObject):
 
         self._handlers = {
             MSG_CLIENT_LIST: self._handle_client_list,
+            MSG_CLIENT_STATE: self._handle_client_state,
             MSG_PAUSE_STATE: self._handle_pause_state,
             MSG_APP_DATA: self._handle_app_data,
             MSG_NETWORK_DATA: self._handle_network_data,
@@ -163,6 +180,11 @@ class Backend(QObject):
 
         self.selectedClientChanged.emit(client_id)
 
+        # Everything keyed on the selection re-reads: the stat strip, the state
+        # pills, and whether the policy editors are showing sent or unsent text.
+        self.clientStateChanged.emit()
+        self.appliedPolicyChanged.emit()
+
     selectedClient = Property(
         str, _get_selected, _set_selected, notify=selectedClientChanged
     )
@@ -173,6 +195,91 @@ class Backend(QObject):
     # Exposed so the policy editor states the cap the client actually enforces,
     # rather than repeating the number and drifting from it.
     maxBlockHours = Property(int, _max_block_hours, constant=True)
+
+    def _pause_cap_minutes(self) -> int:
+        return PAUSE_MAX_SECONDS // 60
+
+    # The other cap, and a different kind: this one guards against the admin
+    # vanishing, where maxBlockHours guards against the overlay hanging. Both
+    # are surfaced so the console can tell the two apart in words rather than
+    # leaving an operator to infer it.
+    pauseCapMinutes = Property(int, _pause_cap_minutes, constant=True)
+
+    # -- live state of the selected machine ---------------------------------
+    #
+    # All four read the same per-client record, so they change together on one
+    # signal rather than four. QML binds them into the monitoring stat strip and
+    # into the state pills on the restriction controls.
+
+    def _selected_state(self) -> dict[str, Any]:
+        return self._client_state.get(self._selected_client, {})
+
+    def _idle_seconds(self) -> float:
+        """Seconds since input on the selected machine; -1 when not yet known."""
+        value = self._selected_state().get("idle_time")
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return -1.0
+
+    idleSeconds = Property(float, _idle_seconds, notify=clientStateChanged)
+
+    def _idle_text(self) -> str:
+        return _format_idle(self._idle_seconds())
+
+    idleText = Property(str, _idle_text, notify=clientStateChanged)
+
+    def _screen_locked(self) -> bool:
+        return bool(self._selected_state().get("screen_locked"))
+
+    screenLocked = Property(bool, _screen_locked, notify=clientStateChanged)
+
+    def _selected_paused(self) -> bool:
+        """Whether the selected machine reports itself paused.
+
+        Read off the roster, which is fed by the client's own heartbeat, so it
+        is what the machine says rather than what this console last asked for.
+        """
+        for row in self.clients.rows:
+            if row.get("client_id") == self._selected_client:
+                return bool(row.get("paused"))
+        return False
+
+    selectedPaused = Property(bool, _selected_paused, notify=clientStateChanged)
+
+    # -- what this console last pushed --------------------------------------
+
+    def _applied_for(self, key: str) -> str:
+        return self._applied.get(self._selected_client, {}).get(key, "")
+
+    def _applied_websites(self) -> str:
+        return self._applied_for("websites")
+
+    def _applied_website_mode(self) -> str:
+        return self._applied_for("website_mode")
+
+    def _applied_websites_at(self) -> str:
+        return self._applied_for("websites_at")
+
+    def _applied_apps(self) -> str:
+        return self._applied_for("apps")
+
+    def _applied_apps_at(self) -> str:
+        return self._applied_for("apps_at")
+
+    appliedWebsites = Property(str, _applied_websites, notify=appliedPolicyChanged)
+    appliedWebsiteMode = Property(str, _applied_website_mode, notify=appliedPolicyChanged)
+    appliedWebsitesAt = Property(str, _applied_websites_at, notify=appliedPolicyChanged)
+    appliedApps = Property(str, _applied_apps, notify=appliedPolicyChanged)
+    appliedAppsAt = Property(str, _applied_apps_at, notify=appliedPolicyChanged)
+
+    def _record_applied(self, **fields: str) -> None:
+        """Note what was just sent to the selected client, with the time."""
+        if not self._selected_client:
+            return
+        record = self._applied.setdefault(self._selected_client, {})
+        record.update(fields)
+        self.appliedPolicyChanged.emit()
 
     # -- connection slots --------------------------------------------------
 
@@ -427,6 +534,11 @@ class Backend(QObject):
                 {"mode": mode, "urls": parsed, "action": action},
             )
         )
+        self._record_applied(
+            websites="\n".join(parsed),
+            website_mode=mode,
+            websites_at=datetime.now().strftime("%H:%M:%S"),
+        )
         self._set_status(f"{mode} policy ({len(parsed)} entries) sent")
 
     @Slot(str)
@@ -454,6 +566,10 @@ class Backend(QObject):
                 [self._selected_client],
                 {"process_names": parsed},
             )
+        )
+        self._record_applied(
+            apps="\n".join(parsed),
+            apps_at=datetime.now().strftime("%H:%M:%S"),
         )
 
         if parsed:
@@ -548,6 +664,23 @@ class Backend(QObject):
         self._set_connected(False)
         self._set_status(reason)
 
+    def _handle_client_state(self, message: dict[str, Any]) -> None:
+        """Record the liveness detail off a watched client's heartbeat.
+
+        Arrives roughly every 15 seconds for the machine this console has
+        selected, and for no other — the Engine scopes it to watchers the way it
+        scopes telemetry. Kept per client rather than for the selection alone so
+        switching back to a machine shows its last known state immediately
+        instead of dashes until the next heartbeat.
+        """
+        client_id = message.get("client_id", "")
+        if not client_id:
+            return
+
+        self._client_state[client_id] = dict(get_payload(message))
+        if client_id == self._selected_client:
+            self.clientStateChanged.emit()
+
     def _handle_pause_state(self, message: dict[str, Any]) -> None:
         payload = get_payload(message)
         client_id = message.get("client_id", "")
@@ -555,6 +688,9 @@ class Backend(QObject):
 
         self._record_pause(client_id, paused, payload.get("pause_until"))
         self._set_status(f"{client_id}: {'paused' if paused else 'resumed'}")
+
+        if client_id == self._selected_client:
+            self.clientStateChanged.emit()
 
         # Keep the roster's badge honest without waiting for a manual refresh.
         asyncio.ensure_future(self._connection.request_client_list())
@@ -574,6 +710,9 @@ class Backend(QObject):
         known = {entry.get("client_id") for entry in clients}
         if self._selected_client and self._selected_client not in known:
             self._set_selected("")
+
+        # The roster carries the paused flag, so the state pills follow it.
+        self.clientStateChanged.emit()
 
     def _handle_app_data(self, message: dict[str, Any]) -> None:
         client_id = message.get("client_id", "")
@@ -707,6 +846,11 @@ class Backend(QObject):
         self.networkSamples.clear()
         self.report.clear()
 
+        # Idle time goes with the connection. A number left on screen from
+        # before the link dropped is worse than a dash: it reads as current.
+        self._client_state.clear()
+        self.clientStateChanged.emit()
+
     def _set_status(self, text: str) -> None:
         self._status = text
         logger.info(text)
@@ -752,6 +896,24 @@ def _parse_iso(value: str) -> datetime | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _format_idle(seconds: float) -> str:
+    """Idle time as something readable at a glance from across a room.
+
+    Width is bounded to five characters so the stat tile does not resize as the
+    number grows, and precision falls away as the value does: nobody reading
+    "has anyone touched this machine?" needs seconds once the answer is hours.
+    """
+    if seconds < 0:
+        return "--"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+
+    hours, minutes = divmod(int(seconds // 60), 60)
+    return f"{hours}h{minutes:02d}"
 
 
 def _format_bytes(value: Any) -> str:
